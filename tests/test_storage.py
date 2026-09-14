@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -69,6 +70,30 @@ def test_cursor_round_trip(tmp_path: Path) -> None:
     storage.set_cursor("personal", uid_validity=22, last_uid=99)
 
     assert storage.get_cursor("personal") == (22, 99)
+
+
+def test_initialize_adds_permanent_failure_state_to_existing_outbox(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "mail.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE notification_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                next_attempt_at TEXT
+            )
+            """
+        )
+
+    Storage(database_path).initialize()
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(notification_outbox)")
+        }
+    assert "permanently_failed_at" in columns
 
 
 def test_feedback_is_capped(tmp_path: Path) -> None:

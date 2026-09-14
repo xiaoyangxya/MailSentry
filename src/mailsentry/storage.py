@@ -9,6 +9,10 @@ from pathlib import Path
 
 from mailsentry.models import Assessment, MailCandidate
 
+INITIAL_NOTIFICATION_RETRY_SECONDS = 60
+MAX_NOTIFICATION_RETRY_SECONDS = 60 * 60
+MAX_NOTIFICATION_ATTEMPTS = 8
+
 
 class Storage:
     def __init__(self, path: Path) -> None:
@@ -25,6 +29,10 @@ class Storage:
             if "next_attempt_at" not in columns:
                 connection.execute(
                     "ALTER TABLE notification_outbox ADD COLUMN next_attempt_at TEXT"
+                )
+            if "permanently_failed_at" not in columns:
+                connection.execute(
+                    "ALTER TABLE notification_outbox ADD COLUMN permanently_failed_at TEXT"
                 )
 
     def get_cursor(self, account_id: str) -> tuple[int, int] | None:
@@ -122,6 +130,7 @@ class Storage:
                     SELECT id, event_id, title, body, attempts
                     FROM notification_outbox
                     WHERE delivered_at IS NULL
+                      AND permanently_failed_at IS NULL
                       AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
                     ORDER BY id LIMIT ?
                     """,
@@ -138,7 +147,9 @@ class Storage:
                 connection.execute(
                     """
                     UPDATE notification_outbox
-                    SET delivered_at = ?, next_attempt_at = NULL
+                    SET delivered_at = ?,
+                        next_attempt_at = NULL,
+                        permanently_failed_at = NULL
                     WHERE id = ?
                     """,
                     (timestamp, outbox_id),
@@ -149,17 +160,34 @@ class Storage:
                 ).fetchone()
                 if row is None:
                     return
-                delay_seconds = min(60 * (2 ** int(row["attempts"])), 3600)
+                attempts = int(row["attempts"]) + 1
+                if attempts >= MAX_NOTIFICATION_ATTEMPTS:
+                    connection.execute(
+                        """
+                        UPDATE notification_outbox
+                        SET attempts = ?,
+                            next_attempt_at = NULL,
+                            permanently_failed_at = ?
+                        WHERE id = ?
+                        """,
+                        (attempts, timestamp, outbox_id),
+                    )
+                    return
+                exponent = min(attempts - 1, 6)
+                delay_seconds = min(
+                    INITIAL_NOTIFICATION_RETRY_SECONDS * (2**exponent),
+                    MAX_NOTIFICATION_RETRY_SECONDS,
+                )
                 next_attempt_at = (
                     datetime.fromisoformat(timestamp) + timedelta(seconds=delay_seconds)
                 ).isoformat()
                 connection.execute(
                     """
                     UPDATE notification_outbox
-                    SET attempts = attempts + 1, next_attempt_at = ?
+                    SET attempts = ?, next_attempt_at = ?
                     WHERE id = ?
                     """,
-                    (next_attempt_at, outbox_id),
+                    (attempts, next_attempt_at, outbox_id),
                 )
 
     def sender_feedback(self, sender: str) -> int:
@@ -250,6 +278,7 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
     attempts INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     delivered_at TEXT,
-    next_attempt_at TEXT
+    next_attempt_at TEXT,
+    permanently_failed_at TEXT
 );
 """
