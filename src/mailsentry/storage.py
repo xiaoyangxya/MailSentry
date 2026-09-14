@@ -215,8 +215,10 @@ class Storage:
             )
         return sender
 
-    def purge(self, retention_days: int) -> int:
-        cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+    def purge(self, retention_days: int, *, now: datetime | None = None) -> int:
+        cutoff = (
+            (now or datetime.now(UTC)).astimezone(UTC) - timedelta(days=retention_days)
+        ).isoformat()
         with self._connect() as connection:
             cursor = connection.execute("DELETE FROM mail_events WHERE created_at < ?", (cutoff,))
             return int(cursor.rowcount)

@@ -75,6 +75,9 @@ class MailSentryService:
             else:
                 self._account_retries.pop(account.id, None)
         delivered, failed = dispatch_outbox(self.storage, self.notifier)
+        purged = self.storage.purge(self.config.storage.retention_days)
+        if purged:
+            LOGGER.info("expired metadata purged events=%s", purged)
         return observed, delivered, failed
 
     def _defer_account(self, account_id: str) -> int:

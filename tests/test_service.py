@@ -179,3 +179,33 @@ def test_process_once_persists_reconciled_cursor_for_empty_mailbox(
 
     assert service.process_once() == (0, 0, 0)
     assert service.storage.get_cursor("personal") == (22, 7)
+
+
+def test_process_once_runs_configured_metadata_retention(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    current_account = account("personal")
+    service = MailSentryService(
+        ServiceConfig(
+            accounts=(current_account,),
+            storage=StorageConfig(
+                path=tmp_path / "mail.db",
+                retention_days=45,
+            ),
+        )
+    )
+    retention_runs: list[int] = []
+    monkeypatch.setattr(service, "_process_account", lambda account_config: 0)
+    monkeypatch.setattr(
+        "mailsentry.service.dispatch_outbox",
+        lambda storage, notifier: (0, 0),
+    )
+    monkeypatch.setattr(
+        service.storage,
+        "purge",
+        lambda retention_days: retention_runs.append(retention_days) or 0,
+    )
+
+    assert service.process_once() == (0, 0, 0)
+    assert retention_runs == [45]

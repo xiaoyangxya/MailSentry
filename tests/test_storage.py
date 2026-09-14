@@ -107,3 +107,35 @@ def test_feedback_is_capped(tmp_path: Path) -> None:
     storage.add_feedback(event_id, True)
 
     assert storage.sender_feedback("sender@example.com") == 30
+
+
+def test_purge_cascades_to_feedback_and_notification_outbox(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "mail.db"
+    storage = Storage(database_path)
+    storage.initialize()
+    event_id, _ = storage.save_assessment(
+        candidate(1),
+        Assessment(90, AlertLevel.IMMEDIATE, ("old event",)),
+    )
+    storage.add_feedback(event_id, True)
+    storage.queue_notification(event_id, "Important email detected", "Old event")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE mail_events SET created_at = ? WHERE id = ?",
+            ("2026-01-01T00:00:00+00:00", event_id),
+        )
+
+    purged = storage.purge(
+        30,
+        now=datetime(2026, 9, 14, tzinfo=UTC),
+    )
+
+    assert purged == 1
+    with sqlite3.connect(database_path) as connection:
+        counts = tuple(
+            connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("mail_events", "feedback", "notification_outbox")
+        )
+    assert counts == (0, 0, 0)
