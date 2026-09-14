@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 from mailsentry.classifier import RuleClassifier
@@ -12,15 +14,30 @@ from mailsentry.notifier import AppriseNotifier, dispatch_outbox
 from mailsentry.storage import Storage
 
 LOGGER = logging.getLogger(__name__)
+INITIAL_RETRY_SECONDS = 60
+MAX_RETRY_SECONDS = 60 * 60
+
+
+@dataclass(frozen=True, slots=True)
+class _AccountRetry:
+    failures: int
+    retry_at: float
 
 
 class MailSentryService:
-    def __init__(self, config: ServiceConfig) -> None:
+    def __init__(
+        self,
+        config: ServiceConfig,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.config = config
         self.storage = Storage(config.storage.path)
         self.storage.initialize()
         self.classifier = RuleClassifier(config.classification)
         self.notifier = AppriseNotifier(config.notifications.urls())
+        self._clock = clock
+        self._account_retries: dict[str, _AccountRetry] = {}
 
     def bootstrap(self, days: int = 1) -> int:
         total = 0
@@ -44,12 +61,33 @@ class MailSentryService:
     def process_once(self) -> tuple[int, int, int]:
         observed = 0
         for account in self.config.accounts:
+            retry = self._account_retries.get(account.id)
+            if retry is not None and self._clock() < retry.retry_at:
+                continue
             try:
                 observed += self._process_account(account)
             except Exception:
-                LOGGER.exception("account processing failed account=%s", account.id)
+                retry_delay = self._defer_account(account.id)
+                LOGGER.exception(
+                    "account processing failed account=%s retry_in_seconds=%s",
+                    account.id,
+                    retry_delay,
+                )
+            else:
+                self._account_retries.pop(account.id, None)
         delivered, failed = dispatch_outbox(self.storage, self.notifier)
         return observed, delivered, failed
+
+    def _defer_account(self, account_id: str) -> int:
+        previous = self._account_retries.get(account_id)
+        failures = 1 if previous is None else previous.failures + 1
+        exponent = min(failures - 1, 6)
+        delay = min(INITIAL_RETRY_SECONDS * (2**exponent), MAX_RETRY_SECONDS)
+        self._account_retries[account_id] = _AccountRetry(
+            failures=failures,
+            retry_at=self._clock() + delay,
+        )
+        return delay
 
     def run_forever(self) -> None:
         while True:
