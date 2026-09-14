@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import apprise
 
 from mailsentry.storage import Storage
@@ -16,12 +18,17 @@ class AppriseNotifier:
         return bool(self._apprise.notify(title=title, body=body))
 
 
-def dispatch_outbox(storage: Storage, notifier: AppriseNotifier) -> tuple[int, int]:
+def dispatch_outbox(
+    storage: Storage,
+    notifier: AppriseNotifier,
+    *,
+    now: datetime | None = None,
+) -> tuple[int, int]:
     delivered = 0
     failed = 0
-    for item in storage.pending_notifications():
+    for item in storage.pending_notifications(now=now):
         success = notifier.send(str(item["title"]), str(item["body"]))
-        storage.mark_notification(int(item["id"]), success)
+        storage.mark_notification(int(item["id"]), success, now=now)
         if success:
             delivered += 1
         else:

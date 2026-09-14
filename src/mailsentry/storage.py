@@ -18,6 +18,14 @@ class Storage:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(SCHEMA)
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(notification_outbox)")
+            }
+            if "next_attempt_at" not in columns:
+                connection.execute(
+                    "ALTER TABLE notification_outbox ADD COLUMN next_attempt_at TEXT"
+                )
 
     def get_cursor(self, account_id: str) -> tuple[int, int] | None:
         with self._connect() as connection:
@@ -104,7 +112,9 @@ class Storage:
                 (event_id, title, body, _now()),
             )
 
-    def pending_notifications(self, limit: int = 100) -> list[sqlite3.Row]:
+    def pending_notifications(
+        self, limit: int = 100, *, now: datetime | None = None
+    ) -> list[sqlite3.Row]:
         with self._connect() as connection:
             return list(
                 connection.execute(
@@ -112,23 +122,44 @@ class Storage:
                     SELECT id, event_id, title, body, attempts
                     FROM notification_outbox
                     WHERE delivered_at IS NULL
+                      AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
                     ORDER BY id LIMIT ?
                     """,
-                    (limit,),
+                    (_timestamp(now), limit),
                 ).fetchall()
             )
 
-    def mark_notification(self, outbox_id: int, delivered: bool) -> None:
+    def mark_notification(
+        self, outbox_id: int, delivered: bool, *, now: datetime | None = None
+    ) -> None:
+        timestamp = _timestamp(now)
         with self._connect() as connection:
             if delivered:
                 connection.execute(
-                    "UPDATE notification_outbox SET delivered_at = ? WHERE id = ?",
-                    (_now(), outbox_id),
+                    """
+                    UPDATE notification_outbox
+                    SET delivered_at = ?, next_attempt_at = NULL
+                    WHERE id = ?
+                    """,
+                    (timestamp, outbox_id),
                 )
             else:
+                row = connection.execute(
+                    "SELECT attempts FROM notification_outbox WHERE id = ?", (outbox_id,)
+                ).fetchone()
+                if row is None:
+                    return
+                delay_seconds = min(60 * (2 ** int(row["attempts"])), 3600)
+                next_attempt_at = (
+                    datetime.fromisoformat(timestamp) + timedelta(seconds=delay_seconds)
+                ).isoformat()
                 connection.execute(
-                    "UPDATE notification_outbox SET attempts = attempts + 1 WHERE id = ?",
-                    (outbox_id,),
+                    """
+                    UPDATE notification_outbox
+                    SET attempts = attempts + 1, next_attempt_at = ?
+                    WHERE id = ?
+                    """,
+                    (next_attempt_at, outbox_id),
                 )
 
     def sender_feedback(self, sender: str) -> int:
@@ -171,7 +202,11 @@ class Storage:
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat()
+    return _timestamp()
+
+
+def _timestamp(value: datetime | None = None) -> str:
+    return (value or datetime.now(UTC)).astimezone(UTC).isoformat()
 
 
 SCHEMA = """
@@ -214,6 +249,7 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
     body TEXT NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    delivered_at TEXT
+    delivered_at TEXT,
+    next_attempt_at TEXT
 );
 """
