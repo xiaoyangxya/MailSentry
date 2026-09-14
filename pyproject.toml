@@ -13,6 +13,7 @@ authors = [{ name = "MailSentry contributors" }]
 dependencies = [
   "apprise>=1.9,<2",
   "imapclient>=3,<4",
+  "python-dotenv>=1.2.2,<2",
   "PyYAML>=6,<7",
   "typer>=0.15,<1",
 ]

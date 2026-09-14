@@ -17,11 +17,13 @@ Copy-Item config.example.yaml config.yaml
 Copy-Item .env.example .env
 ```
 
-编辑 `config.yaml` 和 `.env`，然后检查并启动：
+编辑 `config.yaml` 和 `.env`，然后检查并启动。本地 Python 命令会自动读取
+`.env`，但不会覆盖系统中已经设置的环境变量：
 
 ```powershell
 .\.venv\Scripts\mail-sentinel doctor --no-connect
 .\.venv\Scripts\mail-sentinel doctor
+.\.venv\Scripts\mail-sentinel doctor --notify
 .\.venv\Scripts\mail-sentinel bootstrap
 .\.venv\Scripts\mail-sentinel run
 ```
@@ -30,7 +32,8 @@ Copy-Item .env.example .env
 
 ## 配置与凭据
 
-非敏感设置放在 `config.yaml`；邮箱密码和 Apprise URL 从配置指定的环境变量读取。不要提交 `.env`。
+非敏感设置放在 `config.yaml`；邮箱密码和 Apprise URL 从配置指定的环境变量读取。
+如需加载其他文件，可在命令名称前使用 `--env-file path\to\secrets.env`。不要提交 `.env`。
 
 Apprise 可以连接 Telegram、ntfy、飞书、通用 Webhook 等通知渠道，具体格式参见 [Apprise 服务文档](https://appriseit.com/services/)。
 

@@ -21,11 +21,14 @@ Copy-Item config.example.yaml config.yaml
 Copy-Item .env.example .env
 ```
 
-Edit `config.yaml` and `.env`, then validate the setup:
+Edit `config.yaml` and `.env`, then validate the setup. Local Python commands
+automatically load `.env` without overriding variables already present in the
+environment:
 
 ```powershell
 .\.venv\Scripts\mail-sentinel doctor --no-connect
 .\.venv\Scripts\mail-sentinel doctor
+.\.venv\Scripts\mail-sentinel doctor --notify
 .\.venv\Scripts\mail-sentinel bootstrap
 .\.venv\Scripts\mail-sentinel run
 ```
@@ -36,7 +39,9 @@ notification. Later runs only process messages after the saved mailbox cursor.
 ## Configuration and secrets
 
 Non-secret settings belong in `config.yaml`. Account passwords and Apprise URLs are
-read from environment variables named by that configuration. Never commit `.env`.
+read from environment variables named by that configuration. Use
+`--env-file path\to\secrets.env` before the command name to load another file.
+Never commit `.env`.
 
 Apprise accepts notification URLs for Telegram, ntfy, Feishu, generic webhooks, and
 many other services. See the [Apprise service documentation](https://appriseit.com/services/).
