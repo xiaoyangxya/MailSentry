@@ -44,17 +44,16 @@ class MailSentryService:
         since = date.today() - timedelta(days=days)
         for account in self.config.accounts:
             connector = ImapConnector(account)
-            candidates = connector.fetch_since(since)
-            for candidate in candidates:
+            result = connector.fetch_since(since)
+            for candidate in result.candidates:
                 self._record(candidate, notify=False)
                 total += 1
-            uid_validity, last_uid = connector.folder_cursor()
-            self.storage.set_cursor(account.id, uid_validity, last_uid)
+            self.storage.set_cursor(account.id, result.uid_validity, result.last_uid)
             LOGGER.info(
                 "bootstrapped account=%s candidates=%s last_uid=%s",
                 account.id,
-                len(candidates),
-                last_uid,
+                len(result.candidates),
+                result.last_uid,
             )
         return total
 
@@ -110,11 +109,12 @@ class MailSentryService:
                 f"account {account.id!r} has not been bootstrapped; run bootstrap first"
             )
         uid_validity, last_uid = cursor
-        candidates = ImapConnector(account).fetch_after(last_uid, uid_validity)
-        for candidate in candidates:
+        result = ImapConnector(account).fetch_after(last_uid, uid_validity)
+        for candidate in result.candidates:
             self._record(candidate, notify=True)
             self.storage.set_cursor(account.id, candidate.uid_validity, candidate.uid)
-        return len(candidates)
+        self.storage.set_cursor(account.id, result.uid_validity, result.last_uid)
+        return len(result.candidates)
 
     def _record(self, candidate: MailCandidate, *, notify: bool) -> None:
         feedback = self.storage.sender_feedback(candidate.sender)

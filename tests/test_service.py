@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 from mailsentry.config import AccountConfig, ServiceConfig, StorageConfig
 from mailsentry.service import MailSentryService
@@ -143,3 +144,38 @@ def test_account_backoff_is_capped_at_one_hour(
             clock.advance(delay)
 
     assert caplog.text.count("retry_in_seconds=3600") == 2
+
+
+def test_process_once_persists_reconciled_cursor_for_empty_mailbox(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    current_account = account("personal")
+    service = MailSentryService(
+        ServiceConfig(
+            accounts=(current_account,),
+            storage=StorageConfig(path=tmp_path / "mail.db"),
+        )
+    )
+    service.storage.set_cursor("personal", uid_validity=11, last_uid=99)
+
+    class ReconciledConnector:
+        def __init__(self, account_config: AccountConfig) -> None:
+            assert account_config is current_account
+
+        def fetch_after(self, uid: int, expected_uid_validity: int):
+            assert (uid, expected_uid_validity) == (99, 11)
+            return SimpleNamespace(
+                candidates=(),
+                uid_validity=22,
+                last_uid=7,
+            )
+
+    monkeypatch.setattr("mailsentry.service.ImapConnector", ReconciledConnector)
+    monkeypatch.setattr(
+        "mailsentry.service.dispatch_outbox",
+        lambda storage, notifier: (0, 0),
+    )
+
+    assert service.process_once() == (0, 0, 0)
+    assert service.storage.get_cursor("personal") == (22, 7)

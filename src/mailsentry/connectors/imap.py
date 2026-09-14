@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
@@ -17,6 +18,13 @@ HEADER_FIELDS = (
 FETCH_FIELDS = [HEADER_FIELDS, "BODYSTRUCTURE", "FLAGS", "INTERNALDATE"]
 
 
+@dataclass(frozen=True, slots=True)
+class ImapFetchResult:
+    candidates: tuple[MailCandidate, ...]
+    uid_validity: int
+    last_uid: int
+
+
 class ImapConnector:
     """Read-only IMAP access for one Monitored Account."""
 
@@ -27,14 +35,9 @@ class ImapConnector:
         with self._client() as client:
             client.select_folder(self._account.folder, readonly=True)
 
-    def folder_cursor(self) -> tuple[int, int]:
-        with self._client() as client:
-            status = client.select_folder(self._account.folder, readonly=True)
-            return int(status[b"UIDVALIDITY"]), max(0, int(status.get(b"UIDNEXT", 1)) - 1)
-
     def fetch_after(
         self, uid: int, expected_uid_validity: int | None = None
-    ) -> list[MailCandidate]:
+    ) -> ImapFetchResult:
         with self._client() as client:
             status = client.select_folder(self._account.folder, readonly=True)
             uid_validity = int(status[b"UIDVALIDITY"])
@@ -42,14 +45,13 @@ class ImapConnector:
                 uids = client.search(["SINCE", date.today() - timedelta(days=1)])
             else:
                 uids = client.search(["UID", f"{uid + 1}:*"])
-            return self._fetch(client, uids, uid_validity)
+            return self._fetch(client, uids, status)
 
-    def fetch_since(self, since: date) -> list[MailCandidate]:
+    def fetch_since(self, since: date) -> ImapFetchResult:
         with self._client() as client:
             status = client.select_folder(self._account.folder, readonly=True)
-            uid_validity = int(status[b"UIDVALIDITY"])
             uids = client.search(["SINCE", since])
-            return self._fetch(client, uids, uid_validity)
+            return self._fetch(client, uids, status)
 
     def _client(self) -> IMAPClient:
         client = IMAPClient(
@@ -62,11 +64,13 @@ class ImapConnector:
         return client
 
     def _fetch(
-        self, client: IMAPClient, uids: Iterable[int], uid_validity: int
-    ) -> list[MailCandidate]:
+        self, client: IMAPClient, uids: Iterable[int], status: dict[Any, Any]
+    ) -> ImapFetchResult:
+        uid_validity = int(status[b"UIDVALIDITY"])
+        selected_last_uid = max(0, int(status.get(b"UIDNEXT", 1)) - 1)
         ordered_uids = sorted(int(uid) for uid in uids)
         if not ordered_uids:
-            return []
+            return ImapFetchResult((), uid_validity, selected_last_uid)
         response = client.fetch(ordered_uids, FETCH_FIELDS)
         candidates: list[MailCandidate] = []
         for uid in ordered_uids:
@@ -83,7 +87,11 @@ class ImapConnector:
                     body_structure=data.get(b"BODYSTRUCTURE"),
                 )
             )
-        return candidates
+        return ImapFetchResult(
+            candidates=tuple(candidates),
+            uid_validity=uid_validity,
+            last_uid=max(selected_last_uid, ordered_uids[-1]),
+        )
 
 
 def _header_bytes(data: dict[Any, Any]) -> bytes:
