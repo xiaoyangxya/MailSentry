@@ -44,7 +44,10 @@ class MailSentryService:
     def process_once(self) -> tuple[int, int, int]:
         observed = 0
         for account in self.config.accounts:
-            observed += self._process_account(account)
+            try:
+                observed += self._process_account(account)
+            except Exception:
+                LOGGER.exception("account processing failed account=%s", account.id)
         delivered, failed = dispatch_outbox(self.storage, self.notifier)
         return observed, delivered, failed
 
