@@ -3,7 +3,7 @@ from datetime import date, timedelta
 import pytest
 
 from mailsentry.config import AccountConfig
-from mailsentry.connectors.imap import ImapConnector
+from mailsentry.connectors.imap import HEADER_FIELDS, ImapConnector
 
 
 class EmptyMailboxClient:
@@ -55,6 +55,11 @@ def account() -> AccountConfig:
         username="me@example.com",
         password_env="MAIL_PASSWORD",
     )
+
+
+def test_fetch_requests_common_priority_headers() -> None:
+    for header_name in ("IMPORTANCE", "X-PRIORITY", "PRIORITY", "X-MSMAIL-PRIORITY"):
+        assert header_name in HEADER_FIELDS
 
 
 def test_fetch_after_reconciles_changed_uidvalidity_without_candidates(

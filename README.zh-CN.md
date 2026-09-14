@@ -50,6 +50,10 @@ Apprise 可以连接 Telegram、ntfy、飞书、通用 Webhook 等通知渠道�
 `notifications.digest_times` 时刻合并为一条通知；默认使用
 Asia/Shanghai 的 09:00 和 18:00。摘要时隙会持久化，程序重启后不会重复投递。
 
+可解释规则评分会识别 Gmail 重要标记和常见高优先级邮件头，也会综合配置的
+发件人、主题关键词、附件元数据、群发邮件头及已记录的 Feedback；含义相同的
+重要标记只会加分一次。
+
 ## Docker
 
 启动 Docker Desktop，创建 `config.yaml` 和 `.env`，然后运行：

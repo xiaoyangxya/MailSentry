@@ -36,6 +36,7 @@ def candidate_from_imap(
         subject=_decode(headers.get("subject", "")),
         received_at=received_at,
         flags=flags,
+        has_priority_header=_has_high_priority_header(headers),
         has_list_unsubscribe="list-unsubscribe" in headers,
         attachments=tuple(_attachments(body_structure)),
     )
@@ -46,6 +47,21 @@ def _decode(value: str) -> str:
         return str(make_header(decode_header(value)))
     except (LookupError, UnicodeError):
         return value
+
+
+def _has_high_priority_header(headers: Any) -> bool:
+    importance = _decode(headers.get("importance", "")).strip().casefold()
+    priority = _decode(headers.get("priority", "")).strip().casefold()
+    ms_priority = _decode(headers.get("x-msmail-priority", "")).strip().casefold()
+    x_priority = _decode(headers.get("x-priority", "")).strip().casefold()
+    x_priority_rank = x_priority.split(maxsplit=1)[0] if x_priority else ""
+    return (
+        importance == "high"
+        or priority == "urgent"
+        or ms_priority == "high"
+        or x_priority_rank in {"1", "2"}
+        or x_priority in {"high", "highest"}
+    )
 
 
 def _message_date(header: str | None, internal_date: datetime | None) -> datetime:

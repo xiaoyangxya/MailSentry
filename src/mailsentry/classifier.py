@@ -23,9 +23,12 @@ class RuleClassifier:
         reasons: list[str] = ["baseline"]
 
         normalized_flags = {flag.lower() for flag in candidate.flags}
-        if {"important", "$important"} & normalized_flags:
+        if {"important", "$important", "\\important"} & normalized_flags:
             score += 40
             reasons.append("provider marked the message important")
+        elif candidate.has_priority_header:
+            score += 40
+            reasons.append("message has a high-priority header")
 
         subject = candidate.subject.lower()
         matched_keywords = [

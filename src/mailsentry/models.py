@@ -29,6 +29,7 @@ class MailCandidate:
     subject: str
     received_at: datetime
     flags: frozenset[str] = frozenset()
+    has_priority_header: bool = False
     has_list_unsubscribe: bool = False
     attachments: tuple[AttachmentMetadata, ...] = ()
 

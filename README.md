@@ -60,6 +60,11 @@ Assessments at the digest alert level are grouped into one notification at each
 09:00 and 18:00 Asia/Shanghai. Persisted digest slots prevent duplicate delivery
 after a restart.
 
+The explainable rule assessment recognizes Gmail importance flags and common high-
+priority headers, in addition to configured senders, subject keywords, attachment
+metadata, bulk-mail headers, and recorded Feedback. Equivalent importance signals
+are counted only once.
+
 ## Docker
 
 Start Docker Desktop, create `config.yaml` and `.env`, then run:
