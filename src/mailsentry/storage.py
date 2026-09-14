@@ -56,6 +56,58 @@ class Storage:
             ).fetchone()
         return (int(row[0]), int(row[1])) if row else None
 
+    def account_status(self, account_id: str) -> sqlite3.Row | None:
+        with self._connect() as connection:
+            return connection.execute(
+                """
+                SELECT uid_validity, last_uid, updated_at
+                FROM account_cursors
+                WHERE account_id = ?
+                """,
+                (account_id,),
+            ).fetchone()
+
+    def notification_counts(self) -> tuple[int, int]:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE delivered_at IS NULL AND permanently_failed_at IS NULL
+                    ) AS pending,
+                    COUNT(*) FILTER (WHERE permanently_failed_at IS NOT NULL) AS failed
+                FROM notification_outbox
+                """
+            ).fetchone()
+        return int(row["pending"]), int(row["failed"])
+
+    def recent_assessments(
+        self,
+        limit: int = 20,
+        *,
+        alert_level: str | None = None,
+    ) -> list[sqlite3.Row]:
+        parameters: list[object] = []
+        where = ""
+        if alert_level is not None:
+            where = "WHERE alert_level = ?"
+            parameters.append(alert_level)
+        parameters.append(limit)
+        with self._connect() as connection:
+            return list(
+                connection.execute(
+                    f"""
+                    SELECT id, account_id, received_at, sender, subject, score,
+                           alert_level, reasons_json, created_at
+                    FROM mail_events
+                    {where}
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    parameters,
+                ).fetchall()
+            )
+
     def set_cursor(self, account_id: str, uid_validity: int, last_uid: int) -> None:
         with self._connect() as connection:
             connection.execute(

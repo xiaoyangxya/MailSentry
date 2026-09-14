@@ -26,7 +26,8 @@ Before planning or implementing project work:
 - `src/mailsentry/notifier.py`: Apprise notification delivery.
 - `src/mailsentry/service.py`: bootstrap, per-account IDLE workers, digest
   scheduling, and notification orchestration.
-- `src/mailsentry/cli.py`: `doctor`, `bootstrap`, `run`, `feedback`, and `purge`.
+- `src/mailsentry/cli.py`: `doctor`, `bootstrap`, `run`, `status`, `events`,
+  `feedback`, and `purge`.
 - `tests/`: configuration, classification, parsing, and storage regression tests.
 - `.github/workflows/ci.yml`: Python 3.11/3.12 tests, Ruff, package installation,
   and Docker image build checks for pushes and pull requests.

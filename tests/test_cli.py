@@ -1,8 +1,11 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from mailsentry.cli import app
+from mailsentry.models import AlertLevel, Assessment, MailCandidate
+from mailsentry.storage import Storage
 
 RUNNER = CliRunner()
 
@@ -103,3 +106,104 @@ def test_doctor_can_send_notification_test(tmp_path: Path, monkeypatch) -> None:
             "Notification channel test succeeded.",
         )
     ]
+
+
+def test_status_reports_saved_health_without_connecting(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    database_path = tmp_path / "mail.db"
+    write_config(config_path, database_path)
+    storage = Storage(database_path)
+    storage.initialize()
+    storage.set_cursor("personal", uid_validity=1, last_uid=42)
+    monkeypatch.chdir(tmp_path)
+
+    result = RUNNER.invoke(app, ["status", "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    assert '"account": "personal"' in lines[0]
+    assert '"last_uid": 42' in lines[0]
+    assert '"connection": "not-checked"' in lines[0]
+    assert '"notifications_pending": 0' in lines[1]
+
+
+def test_status_connect_checks_every_account_and_fails_if_one_is_offline(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "mail.db")
+    monkeypatch.chdir(tmp_path)
+
+    class OfflineConnector:
+        def __init__(self, account) -> None:
+            self.account = account
+
+        def check(self) -> None:
+            raise ConnectionError("mailbox unavailable")
+
+    monkeypatch.setattr("mailsentry.cli.ImapConnector", OfflineConnector)
+
+    result = RUNNER.invoke(
+        app,
+        ["status", "--config", str(config_path), "--connect"],
+    )
+
+    assert result.exit_code == 1
+    assert '"connection": "failed"' in result.output
+    assert '"error": "mailbox unavailable"' in result.output
+
+
+def test_events_prints_recent_assessments_and_filters_level(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    database_path = tmp_path / "mail.db"
+    write_config(config_path, database_path)
+    storage = Storage(database_path)
+    storage.initialize()
+    storage.save_assessment(
+        MailCandidate(
+            account_id="personal",
+            uid=1,
+            uid_validity=1,
+            message_id="<cli-event@example.com>",
+            sender="sender@example.com",
+            recipients=("me@example.com",),
+            subject="Important subject",
+            received_at=datetime(2026, 9, 15, tzinfo=UTC),
+        ),
+        Assessment(90, AlertLevel.IMMEDIATE, ("important keyword",)),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "events",
+            "--config",
+            str(config_path),
+            "--level",
+            "immediate",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert '"event_id": 1' in result.output
+    assert '"level": "immediate"' in result.output
+    assert '"reasons": ["important keyword"]' in result.output
+
+
+def test_events_rejects_unknown_level(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "mail.db")
+    monkeypatch.chdir(tmp_path)
+
+    result = RUNNER.invoke(
+        app,
+        ["events", "--config", str(config_path), "--level", "urgent"],
+    )
+
+    assert result.exit_code == 2
+    assert "level must be 'immediate', 'digest', or 'audit'" in result.output

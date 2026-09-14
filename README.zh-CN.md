@@ -28,9 +28,16 @@ Copy-Item .env.example .env
 .\.venv\Scripts\mail-sentinel doctor --notify
 .\.venv\Scripts\mail-sentinel bootstrap
 .\.venv\Scripts\mail-sentinel run
+.\.venv\Scripts\mail-sentinel status --connect
+.\.venv\Scripts\mail-sentinel events --limit 20
 ```
 
 首次 `bootstrap` 会试跑最近 24 小时的邮件，但不会发送通知。之后 `run` 只处理已保存游标之后出现的新邮件。
+
+使用 `status` 查看各账号保存的扫描游标及通知投递计数；添加 `--connect`
+会通过只读 IMAP 连接检查每个邮箱，任何连接失败都会令命令以失败状态退出。使用
+`events` 以 JSON 行查看最近的可解释 Assessment，还可用 `--level immediate`、
+`--level digest` 或 `--level audit` 过滤。
 
 ## 配置与凭据
 

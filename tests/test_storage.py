@@ -72,6 +72,44 @@ def test_cursor_round_trip(tmp_path: Path) -> None:
     assert storage.get_cursor("personal") == (22, 99)
 
 
+def test_status_reports_cursor_and_notification_counts(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "mail.db")
+    storage.initialize()
+    storage.set_cursor("personal", uid_validity=22, last_uid=99)
+    event_id, _ = storage.save_assessment(
+        candidate(1), Assessment(90, AlertLevel.IMMEDIATE, ("test reason",))
+    )
+    storage.queue_notification(event_id, "Important email detected", "Test event")
+
+    account_status = storage.account_status("personal")
+
+    assert account_status is not None
+    assert account_status["uid_validity"] == 22
+    assert account_status["last_uid"] == 99
+    assert account_status["updated_at"]
+    assert storage.account_status("missing") is None
+    assert storage.notification_counts() == (1, 0)
+
+
+def test_recent_assessments_are_newest_first_and_filter_by_level(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "mail.db")
+    storage.initialize()
+    storage.save_assessment(
+        candidate(1, "<first@example.com>"),
+        Assessment(20, AlertLevel.AUDIT, ("baseline",)),
+    )
+    latest_id, _ = storage.save_assessment(
+        candidate(2, "<second@example.com>"),
+        Assessment(90, AlertLevel.IMMEDIATE, ("important",)),
+    )
+
+    events = storage.recent_assessments()
+    immediate = storage.recent_assessments(alert_level="immediate")
+
+    assert [row["id"] for row in events] == [latest_id, latest_id - 1]
+    assert [row["id"] for row in immediate] == [latest_id]
+
+
 def test_initialize_adds_permanent_failure_state_to_existing_outbox(
     tmp_path: Path,
 ) -> None:

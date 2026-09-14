@@ -32,10 +32,18 @@ environment:
 .\.venv\Scripts\mail-sentinel doctor --notify
 .\.venv\Scripts\mail-sentinel bootstrap
 .\.venv\Scripts\mail-sentinel run
+.\.venv\Scripts\mail-sentinel status --connect
+.\.venv\Scripts\mail-sentinel events --limit 20
 ```
 
 The first bootstrap assesses up to 24 hours of recent mail without sending any
 notification. Later runs only process messages after the saved mailbox cursor.
+
+Use `status` to inspect saved scan cursors and notification delivery counts. Add
+`--connect` to verify every configured mailbox through a read-only IMAP connection;
+the command exits unsuccessfully if any connection fails. Use `events` to inspect
+recent explainable Assessments as JSON lines, optionally filtered with
+`--level immediate`, `--level digest`, or `--level audit`.
 
 ## Configuration and secrets
 
