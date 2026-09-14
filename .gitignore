@@ -1,0 +1,47 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.local
+
+# Personal agent and editor configuration
+.agents/skills/
+.codex/
+.claude/
+.vscode/
+.idea/
+.scratch/
+
+# Dependencies
+node_modules/
+vendor/
+.venv/
+venv/
+
+# Build output and caches
+dist/
+build/
+out/
+.cache/
+.next/
+__pycache__/
+*.py[cod]
+
+# Generated test artifacts
+coverage/
+test-results/
+playwright-report/
+.pytest_cache/
+.coverage
+
+# Logs and temporary files
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
