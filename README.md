@@ -7,9 +7,9 @@ assesses incoming messages, and notifies you when an email looks important. It u
 read-only IMAP access and never marks, moves, or deletes source messages.
 
 > Status: foundational v0.1. The rule engine, SQLite persistence, per-account IMAP
-> IDLE monitoring with five-minute catch-up scans, Apprise notifications, CLI, and
-> container packaging are available. Digest delivery and optional cloud-model
-> assessment remain on the roadmap.
+> IDLE monitoring with five-minute catch-up scans, scheduled digest and immediate
+> Apprise notifications, CLI, and container packaging are available. Optional
+> cloud-model assessment remains on the roadmap.
 
 ## Quick start
 
@@ -46,6 +46,11 @@ Never commit `.env`.
 
 Apprise accepts notification URLs for Telegram, ntfy, Feishu, generic webhooks, and
 many other services. See the [Apprise service documentation](https://appriseit.com/services/).
+
+Assessments at the digest alert level are grouped into one notification at each
+`notifications.digest_times` slot in the configured `timezone`. The defaults are
+09:00 and 18:00 Asia/Shanghai. Persisted digest slots prevent duplicate delivery
+after a restart.
 
 ## Docker
 

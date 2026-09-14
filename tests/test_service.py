@@ -1,10 +1,17 @@
 import logging
 import threading
+from datetime import UTC, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
 
-from mailsentry.config import AccountConfig, ServiceConfig, StorageConfig
-from mailsentry.service import MailSentryService
+from mailsentry.config import (
+    AccountConfig,
+    NotificationConfig,
+    ServiceConfig,
+    StorageConfig,
+)
+from mailsentry.models import AlertLevel, Assessment, MailCandidate
+from mailsentry.service import MailSentryService, _latest_digest_slot
 
 
 def account(account_id: str) -> AccountConfig:
@@ -13,6 +20,19 @@ def account(account_id: str) -> AccountConfig:
         host="imap.example.com",
         username=f"{account_id}@example.com",
         password_env=f"{account_id.upper()}_PASSWORD",
+    )
+
+
+def mail_candidate(uid: int, subject: str) -> MailCandidate:
+    return MailCandidate(
+        account_id="personal",
+        uid=uid,
+        uid_validity=1,
+        message_id=f"<{uid}@example.com>",
+        sender="sender@example.com",
+        recipients=("me@example.com",),
+        subject=subject,
+        received_at=datetime(2026, 9, 15, tzinfo=UTC),
     )
 
 
@@ -322,3 +342,79 @@ def test_account_worker_backs_off_after_connection_failure(
     )
 
     assert waits == [60]
+
+
+def test_dispatch_queues_one_timezone_digest_per_slot_across_restart(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2030, 1, 1, 1, 0, tzinfo=UTC)
+    config = ServiceConfig(
+        accounts=(),
+        notifications=NotificationConfig(digest_times=(time(9), time(18))),
+        storage=StorageConfig(path=tmp_path / "mail.db"),
+        timezone="Asia/Shanghai",
+    )
+    service = MailSentryService(config, wall_clock=lambda: now)
+    service.storage.save_assessment(
+        mail_candidate(1, "Review contract"),
+        Assessment(65, AlertLevel.DIGEST, ("medium score",)),
+    )
+    service.storage.save_assessment(
+        mail_candidate(2, "Newsletter"),
+        Assessment(10, AlertLevel.AUDIT, ("low score",)),
+    )
+    sent: list[tuple[str, str]] = []
+
+    class RecordingNotifier:
+        def send(self, title: str, body: str) -> bool:
+            sent.append((title, body))
+            return True
+
+    service.notifier = RecordingNotifier()
+
+    assert service._dispatch_and_retain() == (1, 0)
+    restarted_service = MailSentryService(config, wall_clock=lambda: now)
+    restarted_service.notifier = RecordingNotifier()
+    assert restarted_service._dispatch_and_retain() == (0, 0)
+    assert len(sent) == 1
+    assert sent[0][0] == "MailSentry digest: 1 noteworthy email(s)"
+    assert "Subject: Review contract" in sent[0][1]
+    assert "Why: medium score" in sent[0][1]
+    assert "Newsletter" not in sent[0][1]
+
+
+def test_bootstrap_assessment_is_suppressed_from_future_digest(
+    tmp_path: Path,
+) -> None:
+    service = MailSentryService(
+        ServiceConfig(
+            accounts=(),
+            storage=StorageConfig(path=tmp_path / "mail.db"),
+        )
+    )
+    service.classifier = SimpleNamespace(
+        assess=lambda candidate, feedback: Assessment(
+            65,
+            AlertLevel.DIGEST,
+            ("medium score",),
+        )
+    )
+
+    service._record(mail_candidate(1, "Bootstrap candidate"), notify=False)
+
+    assert (
+        service.storage.pending_digest_events(datetime(2030, 1, 1, tzinfo=UTC))
+        == []
+    )
+
+
+def test_latest_digest_slot_uses_configured_timezone() -> None:
+    before_morning_digest = datetime(2030, 1, 1, 0, 0, tzinfo=UTC)
+
+    slot = _latest_digest_slot(
+        before_morning_digest,
+        "Asia/Shanghai",
+        (time(9), time(18)),
+    )
+
+    assert slot == datetime(2029, 12, 31, 10, 0, tzinfo=UTC)

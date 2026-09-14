@@ -5,7 +5,7 @@
 MailSentry 是一个轻量的个人自托管服务。它以只读方式监控多个邮箱，对新邮件进行可解释评分，并在邮件可能重要时发送通知。它不会把邮件标记为已读、移动或删除邮件。
 
 > 当前状态：基础版 v0.1。规则分类、SQLite 持久化、每账号独立 IMAP IDLE
-> 监控与五分钟补偿扫描、Apprise 通知、CLI 和容器配置已经具备；中等分数邮件摘要及
+> 监控与五分钟补偿扫描、定时摘要与即时 Apprise 通知、CLI 和容器配置已经具备；
 > 可选云模型仍属于后续工作。
 
 ## 快速开始
@@ -38,6 +38,10 @@ Copy-Item .env.example .env
 如需加载其他文件，可在命令名称前使用 `--env-file path\to\secrets.env`。不要提交 `.env`。
 
 Apprise 可以连接 Telegram、ntfy、飞书、通用 Webhook 等通知渠道，具体格式参见 [Apprise 服务文档](https://appriseit.com/services/)。
+
+摘要级别的 Assessment 会在配置时区的每个
+`notifications.digest_times` 时刻合并为一条通知；默认使用
+Asia/Shanghai 的 09:00 和 18:00。摘要时隙会持久化，程序重启后不会重复投递。
 
 ## Docker
 

@@ -1,3 +1,4 @@
+from datetime import time
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,7 @@ def test_loads_minimal_secure_configuration(tmp_path: Path) -> None:
     assert config.accounts[0].port == 993
     assert config.storage.path == Path("test.db")
     assert config.poll_seconds == 300
+    assert config.notifications.digest_times == (time(9), time(18))
 
 
 def test_rejects_plaintext_imap(tmp_path: Path) -> None:
@@ -63,4 +65,29 @@ classification:
     )
 
     with pytest.raises(ConfigurationError, match="thresholds"):
+        load_config(path)
+
+
+def test_loads_custom_digest_times_in_order(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    write_config(
+        path,
+        """
+notifications:
+  digest_times:
+    - "18:30"
+    - "08:15"
+""",
+    )
+
+    config = load_config(path)
+
+    assert config.notifications.digest_times == (time(8, 15), time(18, 30))
+
+
+def test_rejects_unknown_timezone(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    write_config(path, "\ntimezone: Not/A_Timezone\n")
+
+    with pytest.raises(ConfigurationError, match="unknown timezone"):
         load_config(path)

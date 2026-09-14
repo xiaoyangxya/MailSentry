@@ -21,10 +21,11 @@ Before planning or implementing project work:
 - `src/mailsentry/parser.py`: converts untrusted IMAP headers and BODYSTRUCTURE data
   into Mail Candidates without persisting message bodies or attachment content.
 - `src/mailsentry/classifier.py`: deterministic, explainable rule assessment.
-- `src/mailsentry/storage.py`: SQLite cursors, metadata, feedback, deduplication, and
-  notification outbox.
+- `src/mailsentry/storage.py`: SQLite cursors, metadata, feedback, deduplication,
+  digest scheduling state, and notification outbox.
 - `src/mailsentry/notifier.py`: Apprise notification delivery.
-- `src/mailsentry/service.py`: bootstrap and monitoring orchestration.
+- `src/mailsentry/service.py`: bootstrap, per-account IDLE workers, digest
+  scheduling, and notification orchestration.
 - `src/mailsentry/cli.py`: `doctor`, `bootstrap`, `run`, `feedback`, and `purge`.
 - `tests/`: configuration, classification, parsing, and storage regression tests.
 - `.github/workflows/ci.yml`: Python 3.11/3.12 tests, Ruff, package installation,

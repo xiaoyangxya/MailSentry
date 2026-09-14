@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -34,6 +35,18 @@ class Storage:
                 connection.execute(
                     "ALTER TABLE notification_outbox ADD COLUMN permanently_failed_at TEXT"
                 )
+            event_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(mail_events)")
+            }
+            if "digested_at" not in event_columns:
+                connection.execute("ALTER TABLE mail_events ADD COLUMN digested_at TEXT")
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_mail_events_digest_pending
+                ON mail_events(alert_level, digested_at, created_at)
+                """
+            )
 
     def get_cursor(self, account_id: str) -> tuple[int, int] | None:
         with self._connect() as connection:
@@ -119,6 +132,80 @@ class Storage:
                 """,
                 (event_id, title, body, _now()),
             )
+
+    def pending_digest_events(
+        self,
+        before: datetime,
+        limit: int = 100,
+    ) -> list[sqlite3.Row]:
+        with self._connect() as connection:
+            return list(
+                connection.execute(
+                    """
+                    SELECT id, account_id, sender, subject, score, reasons_json
+                    FROM mail_events
+                    WHERE alert_level = ?
+                      AND digested_at IS NULL
+                      AND created_at <= ?
+                    ORDER BY created_at, id
+                    LIMIT ?
+                    """,
+                    ("digest", _timestamp(before), limit),
+                ).fetchall()
+            )
+
+    def suppress_digest(self, event_id: int, *, now: datetime | None = None) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE mail_events
+                SET digested_at = ?
+                WHERE id = ? AND digested_at IS NULL
+                """,
+                (_timestamp(now), event_id),
+            )
+
+    def queue_digest(
+        self,
+        slot: datetime,
+        event_ids: Sequence[int],
+        title: str,
+        body: str,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        slot_at = _timestamp(slot)
+        queued_at = _timestamp(now)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO digest_runs(slot_at, created_at)
+                VALUES (?, ?)
+                """,
+                (slot_at, queued_at),
+            )
+            if cursor.rowcount == 0:
+                return False
+            if not event_ids:
+                return True
+            connection.execute(
+                """
+                INSERT INTO notification_outbox(event_id, title, body, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (event_ids[0], title, body, queued_at),
+            )
+            placeholders = ", ".join("?" for _ in event_ids)
+            connection.execute(
+                f"""
+                UPDATE mail_events
+                SET digested_at = ?
+                WHERE digested_at IS NULL
+                  AND id IN ({placeholders})
+                """,
+                (queued_at, *event_ids),
+            )
+            return True
 
     def pending_notifications(
         self, limit: int = 100, *, now: datetime | None = None
@@ -220,6 +307,7 @@ class Storage:
             (now or datetime.now(UTC)).astimezone(UTC) - timedelta(days=retention_days)
         ).isoformat()
         with self._connect() as connection:
+            connection.execute("DELETE FROM digest_runs WHERE slot_at < ?", (cutoff,))
             cursor = connection.execute("DELETE FROM mail_events WHERE created_at < ?", (cutoff,))
             return int(cursor.rowcount)
 
@@ -261,6 +349,7 @@ CREATE TABLE IF NOT EXISTS mail_events (
     alert_level TEXT NOT NULL,
     reasons_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    digested_at TEXT,
     UNIQUE(account_id, uid_validity, uid)
 );
 
@@ -282,5 +371,10 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
     delivered_at TEXT,
     next_attempt_at TEXT,
     permanently_failed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS digest_runs (
+    slot_at TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
 );
 """

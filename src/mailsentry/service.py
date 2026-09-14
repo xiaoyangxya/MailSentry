@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
+from datetime import time as wall_time
+from zoneinfo import ZoneInfo
 
 from mailsentry.classifier import RuleClassifier
 from mailsentry.config import AccountConfig, ServiceConfig
@@ -34,6 +37,7 @@ class MailSentryService:
         config: ServiceConfig,
         *,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.config = config
         self.storage = Storage(config.storage.path)
@@ -41,6 +45,7 @@ class MailSentryService:
         self.classifier = RuleClassifier(config.classification)
         self.notifier = AppriseNotifier(config.notifications.urls())
         self._clock = clock
+        self._wall_clock = wall_clock or _utc_now
         self._account_retries: dict[str, _AccountRetry] = {}
 
     def bootstrap(self, days: int = 1) -> int:
@@ -82,11 +87,28 @@ class MailSentryService:
         return observed, delivered, failed
 
     def _dispatch_and_retain(self) -> tuple[int, int]:
+        self._queue_due_digest(self._wall_clock())
         delivered, failed = dispatch_outbox(self.storage, self.notifier)
         purged = self.storage.purge(self.config.storage.retention_days)
         if purged:
             LOGGER.info("expired metadata purged events=%s", purged)
         return delivered, failed
+
+    def _queue_due_digest(self, now: datetime) -> None:
+        slot = _latest_digest_slot(
+            now,
+            self.config.timezone,
+            self.config.notifications.digest_times,
+        )
+        events = self.storage.pending_digest_events(slot)
+        title, body = _format_digest(events)
+        self.storage.queue_digest(
+            slot,
+            [int(event["id"]) for event in events],
+            title,
+            body,
+            now=now,
+        )
 
     def _defer_account(self, account_id: str) -> int:
         previous = self._account_retries.get(account_id)
@@ -180,6 +202,8 @@ class MailSentryService:
         feedback = self.storage.sender_feedback(candidate.sender)
         assessment = self.classifier.assess(candidate, feedback)
         event_id, created = self.storage.save_assessment(candidate, assessment)
+        if created and not notify and assessment.level is AlertLevel.DIGEST:
+            self.storage.suppress_digest(event_id)
         if not created or not notify or assessment.level is not AlertLevel.IMMEDIATE:
             return
         reasons = "; ".join(assessment.reasons)
@@ -197,3 +221,46 @@ class MailSentryService:
 def _retry_delay(failures: int) -> int:
     exponent = min(failures - 1, 6)
     return min(INITIAL_RETRY_SECONDS * (2**exponent), MAX_RETRY_SECONDS)
+
+
+def _latest_digest_slot(
+    now: datetime,
+    timezone_name: str,
+    digest_times: tuple[wall_time, ...],
+) -> datetime:
+    if not digest_times:
+        raise ValueError("at least one digest time is required")
+    timezone = ZoneInfo(timezone_name)
+    local_now = now.astimezone(timezone)
+    slots = [
+        datetime.combine(local_now.date(), digest_time, timezone)
+        for digest_time in digest_times
+        if digest_time <= local_now.timetz().replace(tzinfo=None)
+    ]
+    if slots:
+        return max(slots).astimezone(UTC)
+    previous_day = local_now.date() - timedelta(days=1)
+    return datetime.combine(previous_day, digest_times[-1], timezone).astimezone(UTC)
+
+
+def _format_digest(events: list) -> tuple[str, str]:
+    count = len(events)
+    title = f"MailSentry digest: {count} noteworthy email(s)"
+    if not events:
+        return title, ""
+    entries: list[str] = []
+    for event in events:
+        reasons = "; ".join(json.loads(str(event["reasons_json"])))
+        entries.append(
+            f"Account: {event['account_id']}\n"
+            f"From: {event['sender']}\n"
+            f"Subject: {event['subject']}\n"
+            f"Score: {event['score']}\n"
+            f"Why: {reasons}\n"
+            f"Event ID: {event['id']}"
+        )
+    return title, "\n\n".join(entries)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)

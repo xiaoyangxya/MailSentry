@@ -34,6 +34,9 @@ classification:
 
 notifications:
   urls_env: MAILSENTRY_APPRISE_URLS
+  digest_times:
+    - "09:00"
+    - "18:00"
 
 storage:
   path: data/mailsentry.db

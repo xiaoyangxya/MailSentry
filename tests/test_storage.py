@@ -96,6 +96,31 @@ def test_initialize_adds_permanent_failure_state_to_existing_outbox(
     assert "permanently_failed_at" in columns
 
 
+def test_initialize_adds_digest_state_to_existing_mail_events(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "mail.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE mail_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_level TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+    Storage(database_path).initialize()
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(mail_events)")
+        }
+    assert "digested_at" in columns
+
+
 def test_feedback_is_capped(tmp_path: Path) -> None:
     storage = Storage(tmp_path / "mail.db")
     storage.initialize()

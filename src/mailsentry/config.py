@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import time
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
@@ -61,6 +63,7 @@ class ClassificationConfig:
 @dataclass(frozen=True, slots=True)
 class NotificationConfig:
     urls_env: str = "MAILSENTRY_APPRISE_URLS"
+    digest_times: tuple[time, ...] = (time(9), time(18))
 
     def urls(self) -> tuple[str, ...]:
         raw = os.getenv(self.urls_env, "")
@@ -89,6 +92,27 @@ def _mapping(value: Any, key: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ConfigurationError(f"{key} must be a mapping")
     return value
+
+
+def _digest_times(value: Any) -> tuple[time, ...]:
+    if value is None:
+        return NotificationConfig().digest_times
+    if not isinstance(value, list) or not value:
+        raise ConfigurationError("notifications.digest_times must be a non-empty list")
+    parsed: list[time] = []
+    for index, item in enumerate(value):
+        try:
+            parsed_time = time.fromisoformat(str(item))
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"notifications.digest_times[{index}] must use HH:MM format"
+            ) from exc
+        if parsed_time.second or parsed_time.microsecond:
+            raise ConfigurationError(
+                f"notifications.digest_times[{index}] must use minute precision"
+            )
+        parsed.append(parsed_time)
+    return tuple(sorted(set(parsed)))
 
 
 def load_config(path: Path) -> ServiceConfig:
@@ -158,7 +182,8 @@ def load_config(path: Path) -> ServiceConfig:
         accounts=tuple(accounts),
         classification=classification,
         notifications=NotificationConfig(
-            urls_env=str(notify_raw.get("urls_env", "MAILSENTRY_APPRISE_URLS"))
+            urls_env=str(notify_raw.get("urls_env", "MAILSENTRY_APPRISE_URLS")),
+            digest_times=_digest_times(notify_raw.get("digest_times")),
         ),
         storage=StorageConfig(
             path=Path(storage_raw.get("path", "data/mailsentry.db")),
@@ -171,4 +196,8 @@ def load_config(path: Path) -> ServiceConfig:
         raise ConfigurationError("poll_seconds must be at least 30")
     if config.storage.retention_days < 1:
         raise ConfigurationError("retention_days must be at least 1")
+    try:
+        ZoneInfo(config.timezone)
+    except ZoneInfoNotFoundError as exc:
+        raise ConfigurationError(f"unknown timezone {config.timezone!r}") from exc
     return config
