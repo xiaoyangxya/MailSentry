@@ -92,6 +92,45 @@ def test_high_priority_header_is_explainable_without_provider_flag() -> None:
     assert "message has a high-priority header" in assessment.reasons
 
 
+def test_exact_sender_reputation_overrides_domain_reputation() -> None:
+    classifier = RuleClassifier(
+        ClassificationConfig(
+            sender_reputation=(("@example.com", -10), ("person@example.com", 25))
+        )
+    )
+
+    assessment = classifier.assess(candidate())
+
+    assert assessment.score == 45
+    assert "configured sender reputation: +25" in assessment.reasons
+
+
+def test_domain_reputation_applies_to_matching_sender() -> None:
+    classifier = RuleClassifier(
+        ClassificationConfig(sender_reputation=(("@example.com", 15),))
+    )
+
+    assessment = classifier.assess(candidate())
+
+    assert assessment.score == 35
+    assert "configured sender reputation: +15" in assessment.reasons
+
+
+def test_negative_feedback_cannot_suppress_security_or_payment_signal() -> None:
+    classifier = RuleClassifier(ClassificationConfig())
+
+    security = classifier.assess(candidate(subject="Security alert"), sender_feedback=-30)
+    payment = classifier.assess(candidate(subject="付款提醒"), sender_feedback=-30)
+
+    assert security.score == 55
+    assert payment.score == 55
+    assert (
+        "negative sender feedback ignored for protected subject signal"
+        in security.reasons
+    )
+    assert "sender feedback adjustment: -30" not in security.reasons
+
+
 def test_bulk_mail_penalty_and_feedback_are_bounded() -> None:
     classifier = RuleClassifier(ClassificationConfig())
 

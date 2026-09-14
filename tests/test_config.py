@@ -68,6 +68,42 @@ classification:
         load_config(path)
 
 
+def test_loads_sender_and_domain_reputation(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    write_config(
+        path,
+        """
+classification:
+  sender_reputation:
+    Person@Example.com: 20
+    "@trusted.example": 10
+""",
+    )
+
+    config = load_config(path)
+
+    assert config.classification.sender_reputation == (
+        ("person@example.com", 20),
+        ("@trusted.example", 10),
+    )
+
+
+@pytest.mark.parametrize("adjustment", (-31, 31, True, "not-a-number"))
+def test_rejects_invalid_sender_reputation(tmp_path: Path, adjustment: object) -> None:
+    path = tmp_path / "config.yaml"
+    write_config(
+        path,
+        f"""
+classification:
+  sender_reputation:
+    person@example.com: {str(adjustment).lower()}
+""",
+    )
+
+    with pytest.raises(ConfigurationError, match="sender_reputation"):
+        load_config(path)
+
+
 def test_loads_custom_digest_times_in_order(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
     write_config(

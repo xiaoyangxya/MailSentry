@@ -16,6 +16,7 @@ def write_config(
     *,
     password_env: str = "CLI_TEST_PASSWORD",
     notifications_env: str = "CLI_TEST_NOTIFICATIONS",
+    classification: str = "",
 ) -> None:
     path.write_text(
         f"""
@@ -24,6 +25,7 @@ accounts:
     host: imap.example.com
     username: me@example.com
     password_env: {password_env}
+{classification}
 notifications:
   urls_env: {notifications_env}
 storage:
@@ -106,6 +108,45 @@ def test_doctor_can_send_notification_test(tmp_path: Path, monkeypatch) -> None:
             "Notification channel test succeeded.",
         )
     ]
+
+
+def test_explain_assesses_without_saving_or_notifying(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    database_path = tmp_path / "mail.db"
+    write_config(
+        config_path,
+        database_path,
+        classification="""classification:
+  sender_reputation:
+    "@example.com": 15
+""",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "explain",
+            "--config",
+            str(config_path),
+            "--sender",
+            "person@example.com",
+            "--subject",
+            "Security alert",
+            "--priority-header",
+            "--attachment",
+            "report.pdf",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert '"score": 100' in result.output
+    assert '"level": "immediate"' in result.output
+    assert "configured sender reputation: +15" in result.output
+    assert "message has a high-priority header" in result.output
+    assert "important subject keyword: security alert" in result.output
+    assert "message has a potentially important attachment" in result.output
+    assert Storage(database_path).recent_assessments() == []
 
 
 def test_status_reports_saved_health_without_connecting(tmp_path: Path, monkeypatch) -> None:

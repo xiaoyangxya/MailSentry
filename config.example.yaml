@@ -18,6 +18,10 @@ classification:
     - boss@example.com
     - "@trusted.example"
   deny_senders: []
+  # Exact sender entries override matching @domain entries; values are -30 to 30.
+  sender_reputation:
+    billing@example.com: 20
+    "@newsletters.example": -10
   important_keywords:
     - urgent
     - deadline

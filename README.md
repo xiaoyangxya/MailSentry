@@ -34,6 +34,7 @@ environment:
 .\.venv\Scripts\mail-sentinel run
 .\.venv\Scripts\mail-sentinel status --connect
 .\.venv\Scripts\mail-sentinel events --limit 20
+.\.venv\Scripts\mail-sentinel explain --sender billing@example.com --subject "Invoice due"
 ```
 
 The first bootstrap assesses up to 24 hours of recent mail without sending any
@@ -65,6 +66,13 @@ priority headers, in addition to configured senders, subject keywords, attachmen
 metadata, bulk-mail headers, and recorded Feedback. Equivalent importance signals
 are counted only once.
 
+Use `classification.sender_reputation` to assign an adjustment from -30 to 30 to
+an exact sender or an `@domain`; an exact sender entry overrides its domain entry.
+Negative Feedback cannot suppress explicit security or payment subject signals.
+The `explain` command evaluates these rules and existing sender Feedback without
+saving an Assessment or sending a notification. Add `--provider-important`,
+`--priority-header`, `--bulk`, or repeated `--attachment` options to model signals.
+
 ## Docker
 
 Start Docker Desktop, create `config.yaml` and `.env`, then run:
@@ -75,7 +83,9 @@ docker compose up -d
 ```
 
 Persistent metadata is stored in the `mailsentry-data` volume. Message bodies and
-attachment content are not persisted.
+attachment content are not persisted. Privacy regression tests also enforce that
+transient content, mailbox passwords, and notification tokens stay out of SQLite,
+logs, and default notification text.
 
 ## Development
 

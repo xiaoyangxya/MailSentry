@@ -30,6 +30,7 @@ Copy-Item .env.example .env
 .\.venv\Scripts\mail-sentinel run
 .\.venv\Scripts\mail-sentinel status --connect
 .\.venv\Scripts\mail-sentinel events --limit 20
+.\.venv\Scripts\mail-sentinel explain --sender billing@example.com --subject "Invoice due"
 ```
 
 首次 `bootstrap` 会试跑最近 24 小时的邮件，但不会发送通知。之后 `run` 只处理已保存游标之后出现的新邮件。
@@ -54,6 +55,13 @@ Asia/Shanghai 的 09:00 和 18:00。摘要时隙会持久化，程序重启后�
 发件人、主题关键词、附件元数据、群发邮件头及已记录的 Feedback；含义相同的
 重要标记只会加分一次。
 
+可以通过 `classification.sender_reputation` 为精确发件人或 `@域名` 配置
+-30 到 30 的调整值；精确发件人配置优先于域名配置。负面 Feedback 不会压低
+明确的安全或付款主题信号。`explain` 会结合这些规则和已有发件人 Feedback
+进行试算，但不会保存 Assessment 或发送通知；还可以添加
+`--provider-important`、`--priority-header`、`--bulk` 或重复的
+`--attachment` 参数来模拟不同信号。
+
 ## Docker
 
 启动 Docker Desktop，创建 `config.yaml` 和 `.env`，然后运行：
@@ -63,7 +71,9 @@ docker compose run --rm mailsentry bootstrap
 docker compose up -d
 ```
 
-邮件元数据存储在 `mailsentry-data` 数据卷中。邮件正文和附件内容不会持久化。
+邮件元数据存储在 `mailsentry-data` 数据卷中。邮件正文和附件内容不会持久化；
+隐私回归测试还会确保临时内容、邮箱密码和通知 token 不会进入 SQLite、日志或
+默认通知文本。
 
 ## 开发
 

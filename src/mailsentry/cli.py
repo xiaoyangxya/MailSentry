@@ -3,15 +3,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from dotenv import load_dotenv
 
+from mailsentry.classifier import RuleClassifier
 from mailsentry.config import ConfigurationError, load_config
 from mailsentry.connectors import ImapConnector
-from mailsentry.models import AlertLevel
+from mailsentry.models import AlertLevel, AttachmentMetadata, MailCandidate
 from mailsentry.notifier import AppriseNotifier
 from mailsentry.service import MailSentryService
 from mailsentry.storage import Storage
@@ -133,6 +135,63 @@ def run_service(
         typer.echo(f"observed={observed} delivered={delivered} failed={failed}")
         return
     service.run_forever()
+
+
+@app.command()
+def explain(
+    sender: Annotated[str, typer.Option(help="Envelope sender address to assess.")],
+    config: ConfigPath = DEFAULT_CONFIG,
+    subject: Annotated[str, typer.Option(help="Subject text to assess.")] = "",
+    attachment: Annotated[
+        list[str] | None,
+        typer.Option(help="Attachment filename; repeat for multiple files."),
+    ] = None,
+    provider_important: Annotated[
+        bool,
+        typer.Option(help="Include a provider importance flag."),
+    ] = False,
+    priority_header: Annotated[
+        bool,
+        typer.Option(help="Include a recognized high-priority header."),
+    ] = False,
+    bulk: Annotated[
+        bool,
+        typer.Option(help="Include a List-Unsubscribe bulk-mail header."),
+    ] = False,
+) -> None:
+    """Explain a hypothetical Assessment without saving or notifying it."""
+    settings = _load(config)
+    storage = Storage(settings.storage.path)
+    storage.initialize()
+    candidate = MailCandidate(
+        account_id=settings.accounts[0].id,
+        uid=0,
+        uid_validity=0,
+        message_id=None,
+        sender=sender,
+        recipients=(),
+        subject=subject,
+        received_at=datetime.now(UTC),
+        flags=frozenset({"\\Important"}) if provider_important else frozenset(),
+        has_priority_header=priority_header,
+        has_list_unsubscribe=bulk,
+        attachments=tuple(
+            AttachmentMetadata(filename, "application/octet-stream")
+            for filename in attachment or ()
+        ),
+    )
+    feedback = storage.sender_feedback(sender)
+    assessment = RuleClassifier(settings.classification).assess(candidate, feedback)
+    typer.echo(
+        json.dumps(
+            {
+                "score": assessment.score,
+                "level": assessment.level.value,
+                "reasons": assessment.reasons,
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
 @app.command()

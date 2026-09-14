@@ -37,6 +37,7 @@ class AccountConfig:
 class ClassificationConfig:
     allow_senders: tuple[str, ...] = ()
     deny_senders: tuple[str, ...] = ()
+    sender_reputation: tuple[tuple[str, int], ...] = ()
     important_keywords: tuple[str, ...] = (
         "urgent",
         "deadline",
@@ -115,6 +116,33 @@ def _digest_times(value: Any) -> tuple[time, ...]:
     return tuple(sorted(set(parsed)))
 
 
+def _sender_reputation(value: Any) -> tuple[tuple[str, int], ...]:
+    raw = _mapping(value, "classification.sender_reputation")
+    parsed: list[tuple[str, int]] = []
+    for identity, raw_adjustment in raw.items():
+        normalized = str(identity).strip().lower()
+        if "@" not in normalized or normalized == "@":
+            raise ConfigurationError(
+                "classification.sender_reputation keys must be email addresses or @domains"
+            )
+        if isinstance(raw_adjustment, bool):
+            raise ConfigurationError(
+                f"classification.sender_reputation[{identity!r}] must be an integer"
+            )
+        try:
+            adjustment = int(raw_adjustment)
+        except (TypeError, ValueError) as exc:
+            raise ConfigurationError(
+                f"classification.sender_reputation[{identity!r}] must be an integer"
+            ) from exc
+        if not -30 <= adjustment <= 30:
+            raise ConfigurationError(
+                f"classification.sender_reputation[{identity!r}] must be between -30 and 30"
+            )
+        parsed.append((normalized, adjustment))
+    return tuple(parsed)
+
+
 def load_config(path: Path) -> ServiceConfig:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -157,6 +185,7 @@ def load_config(path: Path) -> ServiceConfig:
     classification = ClassificationConfig(
         allow_senders=tuple(str(v).lower() for v in class_raw.get("allow_senders", [])),
         deny_senders=tuple(str(v).lower() for v in class_raw.get("deny_senders", [])),
+        sender_reputation=_sender_reputation(class_raw.get("sender_reputation")),
         important_keywords=tuple(
             str(v).lower()
             for v in class_raw.get("important_keywords", ClassificationConfig().important_keywords)

@@ -5,6 +5,26 @@ from pathlib import Path
 from mailsentry.config import ClassificationConfig
 from mailsentry.models import AlertLevel, Assessment, MailCandidate
 
+PROTECTED_SUBJECT_SIGNALS = (
+    "payment",
+    "invoice",
+    "security alert",
+    "verification code",
+    "one-time password",
+    "password reset",
+    "suspicious login",
+    "fraud",
+    "付款",
+    "支付",
+    "账单",
+    "安全提醒",
+    "验证码",
+    "一次性密码",
+    "密码重置",
+    "异常登录",
+    "欺诈",
+)
+
 
 class RuleClassifier:
     """Conservative, explainable classifier used before any optional cloud model."""
@@ -21,6 +41,11 @@ class RuleClassifier:
 
         score = 20
         reasons: list[str] = ["baseline"]
+
+        reputation = _configured_reputation(sender, self._config.sender_reputation)
+        if reputation:
+            score += reputation
+            reasons.append(f"configured sender reputation: {reputation:+d}")
 
         normalized_flags = {flag.lower() for flag in candidate.flags}
         if {"important", "$important", "\\important"} & normalized_flags:
@@ -52,8 +77,14 @@ class RuleClassifier:
 
         if sender_feedback:
             adjustment = max(-30, min(30, sender_feedback))
-            score += adjustment
-            reasons.append(f"sender feedback adjustment: {adjustment:+d}")
+            has_protected_signal = any(
+                signal in subject for signal in PROTECTED_SUBJECT_SIGNALS
+            )
+            if adjustment < 0 and has_protected_signal:
+                reasons.append("negative sender feedback ignored for protected subject signal")
+            else:
+                score += adjustment
+                reasons.append(f"sender feedback adjustment: {adjustment:+d}")
 
         score = max(0, min(100, score))
         if score >= self._config.immediate_threshold:
@@ -71,3 +102,17 @@ def _matches_sender(sender: str, configured: tuple[str, ...]) -> bool:
         sender == value or (value.startswith("@") and address_domain == value[1:])
         for value in configured
     )
+
+
+def _configured_reputation(
+    sender: str,
+    configured: tuple[tuple[str, int], ...],
+) -> int:
+    for identity, adjustment in configured:
+        if not identity.startswith("@") and sender == identity:
+            return adjustment
+    address_domain = sender.rsplit("@", maxsplit=1)[-1]
+    for identity, adjustment in configured:
+        if identity.startswith("@") and address_domain == identity[1:]:
+            return adjustment
+    return 0
