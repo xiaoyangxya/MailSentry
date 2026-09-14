@@ -6,9 +6,10 @@ MailSentry is a lightweight, self-hosted service that watches multiple mailboxes
 assesses incoming messages, and notifies you when an email looks important. It uses
 read-only IMAP access and never marks, moves, or deletes source messages.
 
-> Status: foundational v0.1. The rule engine, SQLite persistence, IMAP polling,
-> Apprise notifications, CLI, and container packaging are available. IMAP IDLE,
-> digest delivery, and optional cloud-model assessment remain on the roadmap.
+> Status: foundational v0.1. The rule engine, SQLite persistence, per-account IMAP
+> IDLE monitoring with five-minute catch-up scans, Apprise notifications, CLI, and
+> container packaging are available. Digest delivery and optional cloud-model
+> assessment remain on the roadmap.
 
 ## Quick start
 

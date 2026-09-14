@@ -1,4 +1,5 @@
 timezone: Asia/Shanghai
+# IDLE renewal and catch-up interval, capped internally at five minutes.
 poll_seconds: 300
 
 accounts:

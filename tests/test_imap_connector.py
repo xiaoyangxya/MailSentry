@@ -1,5 +1,7 @@
 from datetime import date, timedelta
 
+import pytest
+
 from mailsentry.config import AccountConfig
 from mailsentry.connectors.imap import ImapConnector
 
@@ -26,6 +28,24 @@ class EmptyMailboxClient:
     def search(self, criteria: list[object]) -> list[int]:
         self.searches.append(criteria)
         return []
+
+
+class IdleClient(EmptyMailboxClient):
+    def __init__(self) -> None:
+        super().__init__(uid_validity=11, uid_next=1)
+        self.idle_started = False
+        self.idle_timeouts: list[float] = []
+        self.idle_finished = False
+
+    def idle(self) -> None:
+        self.idle_started = True
+
+    def idle_check(self, timeout: float):
+        self.idle_timeouts.append(timeout)
+        return []
+
+    def idle_done(self) -> None:
+        self.idle_finished = True
 
 
 def account() -> AccountConfig:
@@ -63,3 +83,31 @@ def test_fetch_after_uses_saved_uid_when_uidvalidity_matches(monkeypatch) -> Non
     assert result.uid_validity == 11
     assert result.last_uid == 99
     assert client.searches == [["UID", "43:*"]]
+
+
+def test_wait_for_change_uses_read_only_idle_and_ends_session(monkeypatch) -> None:
+    client = IdleClient()
+    connector = ImapConnector(account())
+    monkeypatch.setattr(connector, "_client", lambda: client)
+
+    connector.wait_for_change(timeout=300)
+
+    assert client.idle_started is True
+    assert client.idle_timeouts == [300]
+    assert client.idle_finished is True
+
+
+def test_wait_for_change_ends_idle_session_after_check_failure(monkeypatch) -> None:
+    class FailingIdleClient(IdleClient):
+        def idle_check(self, timeout: float):
+            self.idle_timeouts.append(timeout)
+            raise ConnectionError("server disconnected")
+
+    client = FailingIdleClient()
+    connector = ImapConnector(account())
+    monkeypatch.setattr(connector, "_client", lambda: client)
+
+    with pytest.raises(ConnectionError, match="server disconnected"):
+        connector.wait_for_change(timeout=300)
+
+    assert client.idle_finished is True

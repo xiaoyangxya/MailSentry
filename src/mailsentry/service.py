@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,6 +17,9 @@ from mailsentry.storage import Storage
 LOGGER = logging.getLogger(__name__)
 INITIAL_RETRY_SECONDS = 60
 MAX_RETRY_SECONDS = 60 * 60
+MAX_IDLE_WAIT_SECONDS = 5 * 60
+OUTBOX_CHECK_SECONDS = 30
+WORKER_JOIN_SECONDS = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,17 +78,20 @@ class MailSentryService:
                 )
             else:
                 self._account_retries.pop(account.id, None)
+        delivered, failed = self._dispatch_and_retain()
+        return observed, delivered, failed
+
+    def _dispatch_and_retain(self) -> tuple[int, int]:
         delivered, failed = dispatch_outbox(self.storage, self.notifier)
         purged = self.storage.purge(self.config.storage.retention_days)
         if purged:
             LOGGER.info("expired metadata purged events=%s", purged)
-        return observed, delivered, failed
+        return delivered, failed
 
     def _defer_account(self, account_id: str) -> int:
         previous = self._account_retries.get(account_id)
         failures = 1 if previous is None else previous.failures + 1
-        exponent = min(failures - 1, 6)
-        delay = min(INITIAL_RETRY_SECONDS * (2**exponent), MAX_RETRY_SECONDS)
+        delay = _retry_delay(failures)
         self._account_retries[account_id] = _AccountRetry(
             failures=failures,
             retry_at=self._clock() + delay,
@@ -92,18 +99,68 @@ class MailSentryService:
         return delay
 
     def run_forever(self) -> None:
-        while True:
+        stop_event = threading.Event()
+        outbox_ready = threading.Event()
+        workers = [
+            threading.Thread(
+                target=self._run_account_worker,
+                args=(account, stop_event, outbox_ready),
+                name=f"mailsentry-{account.id}",
+                daemon=True,
+            )
+            for account in self.config.accounts
+        ]
+        for worker in workers:
+            worker.start()
+        LOGGER.info("monitoring workers started accounts=%s", len(workers))
+        try:
+            while not stop_event.is_set():
+                outbox_ready.clear()
+                try:
+                    delivered, failed = self._dispatch_and_retain()
+                    LOGGER.info(
+                        "notification cycle complete delivered=%s failed=%s",
+                        delivered,
+                        failed,
+                    )
+                except Exception:
+                    LOGGER.exception("notification cycle failed")
+                outbox_ready.wait(OUTBOX_CHECK_SECONDS)
+        except KeyboardInterrupt:
+            LOGGER.info("shutdown requested")
+        finally:
+            stop_event.set()
+            outbox_ready.set()
+            for worker in workers:
+                worker.join(WORKER_JOIN_SECONDS)
+
+    def _run_account_worker(
+        self,
+        account: AccountConfig,
+        stop_event: threading.Event,
+        outbox_ready: threading.Event,
+    ) -> None:
+        failures = 0
+        idle_timeout = min(self.config.poll_seconds, MAX_IDLE_WAIT_SECONDS)
+        while not stop_event.is_set():
             try:
-                observed, delivered, failed = self.process_once()
-                LOGGER.info(
-                    "cycle complete observed=%s delivered=%s failed=%s",
-                    observed,
-                    delivered,
-                    failed,
-                )
+                observed = self._process_account(account)
+                if observed:
+                    outbox_ready.set()
+                if stop_event.is_set():
+                    break
+                ImapConnector(account).wait_for_change(idle_timeout)
             except Exception:
-                LOGGER.exception("monitoring cycle failed")
-            time.sleep(self.config.poll_seconds)
+                failures += 1
+                retry_delay = _retry_delay(failures)
+                LOGGER.exception(
+                    "account worker failed account=%s retry_in_seconds=%s",
+                    account.id,
+                    retry_delay,
+                )
+                stop_event.wait(retry_delay)
+            else:
+                failures = 0
 
     def _process_account(self, account: AccountConfig) -> int:
         cursor = self.storage.get_cursor(account.id)
@@ -135,3 +192,8 @@ class MailSentryService:
             f"Event ID: {event_id}"
         )
         self.storage.queue_notification(event_id, "Important email detected", body)
+
+
+def _retry_delay(failures: int) -> int:
+    exponent = min(failures - 1, 6)
+    return min(INITIAL_RETRY_SECONDS * (2**exponent), MAX_RETRY_SECONDS)

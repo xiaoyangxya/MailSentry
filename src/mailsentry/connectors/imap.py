@@ -35,6 +35,15 @@ class ImapConnector:
         with self._client() as client:
             client.select_folder(self._account.folder, readonly=True)
 
+    def wait_for_change(self, timeout: float) -> None:
+        with self._client() as client:
+            client.select_folder(self._account.folder, readonly=True)
+            client.idle()
+            try:
+                client.idle_check(timeout=timeout)
+            finally:
+                client.idle_done()
+
     def fetch_after(
         self, uid: int, expected_uid_validity: int | None = None
     ) -> ImapFetchResult:

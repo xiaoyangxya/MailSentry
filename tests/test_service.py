@@ -1,4 +1,5 @@
 import logging
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -209,3 +210,115 @@ def test_process_once_runs_configured_metadata_retention(
 
     assert service.process_once() == (0, 0, 0)
     assert retention_runs == [45]
+
+
+def test_run_forever_starts_one_worker_per_account(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    accounts = (account("personal"), account("work"))
+    service = MailSentryService(
+        ServiceConfig(
+            accounts=accounts,
+            storage=StorageConfig(path=tmp_path / "mail.db"),
+        )
+    )
+    started: list[str] = []
+
+    def run_worker(
+        account_config: AccountConfig,
+        stop_event: threading.Event,
+        outbox_ready: threading.Event,
+    ) -> None:
+        started.append(account_config.id)
+
+    def stop_supervisor() -> tuple[int, int]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(service, "_run_account_worker", run_worker)
+    monkeypatch.setattr(service, "_dispatch_and_retain", stop_supervisor)
+
+    service.run_forever()
+
+    assert sorted(started) == ["personal", "work"]
+
+
+def test_account_worker_catches_up_after_idle_timeout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    current_account = account("personal")
+    service = MailSentryService(
+        ServiceConfig(
+            accounts=(current_account,),
+            storage=StorageConfig(path=tmp_path / "mail.db"),
+            poll_seconds=900,
+        )
+    )
+    stop_event = threading.Event()
+    outbox_ready = threading.Event()
+    scans = 0
+    idle_timeouts: list[float] = []
+
+    def process_account(account_config: AccountConfig) -> int:
+        nonlocal scans
+        assert account_config is current_account
+        scans += 1
+        if scans == 2:
+            stop_event.set()
+        return 1 if scans == 1 else 0
+
+    class IdleConnector:
+        def __init__(self, account_config: AccountConfig) -> None:
+            assert account_config is current_account
+
+        def wait_for_change(self, timeout: float) -> None:
+            idle_timeouts.append(timeout)
+
+    monkeypatch.setattr(service, "_process_account", process_account)
+    monkeypatch.setattr("mailsentry.service.ImapConnector", IdleConnector)
+
+    service._run_account_worker(current_account, stop_event, outbox_ready)
+
+    assert scans == 2
+    assert idle_timeouts == [300]
+    assert outbox_ready.is_set() is True
+
+
+def test_account_worker_backs_off_after_connection_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    current_account = account("personal")
+    service = MailSentryService(
+        ServiceConfig(
+            accounts=(current_account,),
+            storage=StorageConfig(path=tmp_path / "mail.db"),
+        )
+    )
+    waits: list[float] = []
+
+    class StopAfterWait:
+        stopped = False
+
+        def is_set(self) -> bool:
+            return self.stopped
+
+        def wait(self, timeout: float) -> bool:
+            waits.append(timeout)
+            self.stopped = True
+            return True
+
+    monkeypatch.setattr(
+        service,
+        "_process_account",
+        lambda account_config: (_ for _ in ()).throw(ConnectionError("offline")),
+    )
+
+    service._run_account_worker(
+        current_account,
+        StopAfterWait(),
+        threading.Event(),
+    )
+
+    assert waits == [60]
