@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mailsentry"
+version = "0.1.0"
+description = "A lightweight, self-hosted important-email monitor."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "AGPL-3.0-or-later" }
+authors = [{ name = "MailSentry contributors" }]
+dependencies = [
+  "apprise>=1.9,<2",
+  "imapclient>=3,<4",
+  "PyYAML>=6,<7",
+  "typer>=0.15,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+  "ruff>=0.9,<1",
+]
+
+[project.scripts]
+mail-sentinel = "mailsentry.cli:app"
+mailsentry = "mailsentry.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mailsentry"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

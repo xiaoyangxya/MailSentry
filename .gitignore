@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 *.local
+config.yaml
+data/
 
 # Personal agent and editor configuration
 .agents/skills/
@@ -33,6 +35,12 @@ test-results/
 playwright-report/
 .pytest_cache/
 .coverage
+.ruff_cache/
+
+# Packaging
+*.egg-info/
+.eggs/
+
 
 # Logs and temporary files
 *.log

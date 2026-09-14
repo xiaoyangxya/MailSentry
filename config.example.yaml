@@ -1,0 +1,39 @@
+timezone: Asia/Shanghai
+poll_seconds: 300
+
+accounts:
+  - id: personal
+    host: imap.example.com
+    port: 993
+    username: you@example.com
+    password_env: MAILSENTRY_PERSONAL_PASSWORD
+    folder: INBOX
+    tls: true
+
+classification:
+  immediate_threshold: 80
+  digest_threshold: 50
+  allow_senders:
+    - boss@example.com
+    - "@trusted.example"
+  deny_senders: []
+  important_keywords:
+    - urgent
+    - deadline
+    - invoice
+    - security alert
+    - 紧急
+    - 截止
+    - 账单
+    - 安全提醒
+  important_attachment_extensions:
+    - .pdf
+    - .docx
+    - .xlsx
+
+notifications:
+  urls_env: MAILSENTRY_APPRISE_URLS
+
+storage:
+  path: data/mailsentry.db
+  retention_days: 30
