@@ -84,3 +84,37 @@ def test_does_not_treat_low_priority_headers_as_high_priority() -> None:
     )
 
     assert parsed.has_priority_header is False
+
+
+def test_extracts_and_limits_clean_plain_text_for_transient_cloud_input() -> None:
+    parsed = candidate_from_imap(
+        account_id="personal",
+        uid=10,
+        uid_validity=11,
+        header_bytes=b"Content-Type: text/plain; charset=utf-8\r\n\r\n",
+        flags=frozenset(),
+        internal_date=datetime(2026, 1, 1, tzinfo=UTC),
+        body_structure=None,
+        body_bytes=("  hello\x00   world  " + "x" * 4_100).encode(),
+    )
+
+    assert parsed.text_excerpt.startswith("hello world ")
+    assert len(parsed.text_excerpt) == 4_000
+
+
+def test_extracts_html_text_without_active_or_visual_markup() -> None:
+    parsed = candidate_from_imap(
+        account_id="personal",
+        uid=11,
+        uid_validity=11,
+        header_bytes=b"Content-Type: text/html; charset=utf-8\r\n\r\n",
+        flags=frozenset(),
+        internal_date=datetime(2026, 1, 1, tzinfo=UTC),
+        body_structure=None,
+        body_bytes=(
+            b"<style>secret-style</style><p>Hello <b>team</b></p>"
+            b"<script>secret-script</script><svg>secret-svg</svg>"
+        ),
+    )
+
+    assert parsed.text_excerpt == "Hello team"

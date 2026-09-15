@@ -138,3 +138,33 @@ def test_bulk_mail_penalty_and_feedback_are_bounded() -> None:
 
     assert assessment.score == 0
     assert assessment.level is AlertLevel.AUDIT
+
+
+def test_cloud_refiner_runs_only_for_ambiguous_rule_assessment() -> None:
+    refined: list[int] = []
+
+    def refiner(mail: MailCandidate, assessment):
+        refined.append(mail.uid)
+        return assessment
+
+    classifier = RuleClassifier(ClassificationConfig(), refiner=refiner)
+
+    classifier.assess(candidate(uid=1))
+    classifier.assess(candidate(uid=2, has_priority_header=True))
+    classifier.assess(candidate(uid=3, subject="Urgent", has_priority_header=True))
+
+    assert refined == [2]
+
+
+def test_cloud_failure_falls_back_without_logging_sensitive_details(caplog) -> None:
+    def fail(mail: MailCandidate, assessment):
+        raise TimeoutError("API-KEY-OR-BODY-SECRET")
+
+    classifier = RuleClassifier(ClassificationConfig(), refiner=fail)
+
+    assessment = classifier.assess(candidate(has_priority_header=True))
+
+    assert assessment.score == 60
+    assert assessment.level is AlertLevel.DIGEST
+    assert "TimeoutError" in caplog.text
+    assert "API-KEY-OR-BODY-SECRET" not in caplog.text

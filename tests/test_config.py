@@ -127,3 +127,46 @@ def test_rejects_unknown_timezone(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigurationError, match="unknown timezone"):
         load_config(path)
+
+
+def test_loads_custom_responses_compatible_cloud_provider(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    write_config(
+        path,
+        """
+classification:
+  cloud:
+    enabled: true
+    base_url: https://api.deepseek.com/
+    model: deepseek-flash
+    api_key_env: DEEPSEEK_API_KEY
+    timeout_seconds: 12
+""",
+    )
+
+    cloud = load_config(path).classification.cloud
+
+    assert cloud.enabled is True
+    assert cloud.base_url == "https://api.deepseek.com"
+    assert cloud.model == "deepseek-flash"
+    assert cloud.api_key_env == "DEEPSEEK_API_KEY"
+    assert cloud.timeout_seconds == 12
+
+
+@pytest.mark.parametrize(
+    ("cloud_yaml", "message"),
+    (
+        ("enabled: true", "model is required"),
+        ("enabled: false\n    base_url: http://example.com", "must use HTTPS"),
+        ("enabled: false\n    timeout_seconds: 61", "between 1 and 60"),
+        ("enabled: 'false'", "must be a boolean"),
+    ),
+)
+def test_rejects_invalid_cloud_configuration(
+    tmp_path: Path, cloud_yaml: str, message: str
+) -> None:
+    path = tmp_path / "config.yaml"
+    write_config(path, f"\nclassification:\n  cloud:\n    {cloud_yaml}\n")
+
+    with pytest.raises(ConfigurationError, match=message):
+        load_config(path)

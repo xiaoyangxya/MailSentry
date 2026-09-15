@@ -181,8 +181,11 @@ def test_process_once_persists_reconciled_cursor_for_empty_mailbox(
     service.storage.set_cursor("personal", uid_validity=11, last_uid=99)
 
     class ReconciledConnector:
-        def __init__(self, account_config: AccountConfig) -> None:
+        def __init__(
+            self, account_config: AccountConfig, *, include_text: bool = False
+        ) -> None:
             assert account_config is current_account
+            assert include_text is False
 
         def fetch_after(self, uid: int, expected_uid_validity: int):
             assert (uid, expected_uid_validity) == (99, 11)

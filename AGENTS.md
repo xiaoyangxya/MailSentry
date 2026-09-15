@@ -18,9 +18,11 @@ Before planning or implementing project work:
 
 - `src/mailsentry/connectors/`: read-only mailbox provider adapters; IMAP is the
   currently implemented provider.
-- `src/mailsentry/parser.py`: converts untrusted IMAP headers and BODYSTRUCTURE data
-  into Mail Candidates without persisting message bodies or attachment content.
+- `src/mailsentry/parser.py`: converts untrusted IMAP metadata into Mail Candidates
+  and, only for opted-in cloud assessment, produces a transient cleaned text excerpt.
 - `src/mailsentry/classifier.py`: deterministic, explainable rule assessment.
+- `src/mailsentry/cloud_classifier.py`: optional OpenAI Responses-compatible adapter
+  for ambiguous Assessments with minimal payloads and strict structured output.
 - `src/mailsentry/storage.py`: SQLite cursors, metadata, feedback, deduplication,
   digest scheduling state, and notification outbox.
 - `src/mailsentry/notifier.py`: Apprise notification delivery.
@@ -33,6 +35,10 @@ Before planning or implementing project work:
   and Docker image build checks for pushes and pull requests.
 - `config.example.yaml`, `.env.example`: non-secret configuration contracts.
 - `Dockerfile`, `compose.yaml`: single-container deployment packaging.
+- `docs/operations.md`: VPS installation, backup/restore, credential rotation,
+  upgrade/rollback, log collection, and incident-response runbook.
+- `docs/setup-gmail-discord*.md`: bilingual personal Gmail IMAP and Discord
+  webhook setup, validation, troubleshooting, and credential rotation.
 
 ## Safety boundaries
 
@@ -42,6 +48,9 @@ Before planning or implementing project work:
   `config.yaml`, local databases, and real personal data outside version control.
 - Persist metadata and Assessment reasons only. Keep message bodies transient and
   treat all email content as untrusted input.
+- Cloud assessment must remain opt-in and ambiguous-only. Limit provider payloads
+  to sender, subject, attachment metadata, and 4,000 cleaned text characters; keep
+  API keys in named environment variables and safely fall back to local rules.
 - Keep default notifications limited to account alias, sender, subject, score,
   reasons, and event ID.
 - Maintain Python compatibility with the range declared in `pyproject.toml` and

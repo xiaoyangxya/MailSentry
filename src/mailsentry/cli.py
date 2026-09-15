@@ -11,6 +11,7 @@ import typer
 from dotenv import load_dotenv
 
 from mailsentry.classifier import RuleClassifier
+from mailsentry.cloud_classifier import ResponsesCompatibleClassifier
 from mailsentry.config import ConfigurationError, load_config
 from mailsentry.connectors import ImapConnector
 from mailsentry.models import AlertLevel, AttachmentMetadata, MailCandidate
@@ -68,6 +69,16 @@ def doctor(
 ) -> None:
     """Validate configuration, secrets, storage, and optionally IMAP connections."""
     settings = _load(config)
+    if settings.classification.cloud.enabled:
+        try:
+            settings.classification.cloud.api_key()
+        except ConfigurationError as exc:
+            _configuration_error(exc)
+        typer.echo(
+            "OK cloud_classifier=true "
+            f"model={settings.classification.cloud.model} "
+            f"base_url={settings.classification.cloud.base_url}"
+        )
     storage = Storage(settings.storage.path)
     storage.initialize()
     for account in settings.accounts:
@@ -158,6 +169,14 @@ def explain(
         bool,
         typer.Option(help="Include a List-Unsubscribe bulk-mail header."),
     ] = False,
+    text: Annotated[
+        str,
+        typer.Option(help="Optional transient message text for an explicit cloud test."),
+    ] = "",
+    cloud: Annotated[
+        bool,
+        typer.Option(help="Test the configured Responses-compatible cloud provider."),
+    ] = False,
 ) -> None:
     """Explain a hypothetical Assessment without saving or notifying it."""
     settings = _load(config)
@@ -179,9 +198,26 @@ def explain(
             AttachmentMetadata(filename, "application/octet-stream")
             for filename in attachment or ()
         ),
+        text_excerpt=text,
     )
     feedback = storage.sender_feedback(sender)
     assessment = RuleClassifier(settings.classification).assess(candidate, feedback)
+    if cloud:
+        if not settings.classification.cloud.enabled:
+            _configuration_error(
+                ConfigurationError("classification.cloud must be enabled for --cloud")
+            )
+        try:
+            assessment = ResponsesCompatibleClassifier(
+                settings.classification
+            ).refine(candidate, assessment)
+        except ConfigurationError as exc:
+            _configuration_error(exc)
+        except Exception as exc:
+            typer.echo(
+                f"Cloud assessment failed safely: {type(exc).__name__}", err=True
+            )
+            raise typer.Exit(1) from None
     typer.echo(
         json.dumps(
             {

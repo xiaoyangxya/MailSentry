@@ -14,9 +14,11 @@ from mailsentry.parser import candidate_from_imap
 HEADER_FIELDS = (
     "BODY.PEEK[HEADER.FIELDS "
     "(MESSAGE-ID FROM TO SUBJECT DATE LIST-UNSUBSCRIBE X-PRIORITY IMPORTANCE "
-    "PRIORITY X-MSMAIL-PRIORITY)]"
+    "PRIORITY X-MSMAIL-PRIORITY CONTENT-TYPE MIME-VERSION "
+    "CONTENT-TRANSFER-ENCODING)]"
 )
 FETCH_FIELDS = [HEADER_FIELDS, "BODYSTRUCTURE", "FLAGS", "INTERNALDATE"]
+TEXT_PREVIEW_FIELD = "BODY.PEEK[TEXT]<0.65536>"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,8 +31,9 @@ class ImapFetchResult:
 class ImapConnector:
     """Read-only IMAP access for one Monitored Account."""
 
-    def __init__(self, account: AccountConfig) -> None:
+    def __init__(self, account: AccountConfig, *, include_text: bool = False) -> None:
         self._account = account
+        self._include_text = include_text
 
     def check(self) -> None:
         with self._client() as client:
@@ -81,7 +84,10 @@ class ImapConnector:
         ordered_uids = sorted(int(uid) for uid in uids)
         if not ordered_uids:
             return ImapFetchResult((), uid_validity, selected_last_uid)
-        response = client.fetch(ordered_uids, FETCH_FIELDS)
+        fetch_fields = [*FETCH_FIELDS]
+        if self._include_text:
+            fetch_fields.append(TEXT_PREVIEW_FIELD)
+        response = client.fetch(ordered_uids, fetch_fields)
         candidates: list[MailCandidate] = []
         for uid in ordered_uids:
             data = response[uid]
@@ -95,6 +101,7 @@ class ImapConnector:
                     flags=frozenset(_decode_flags(data.get(b"FLAGS", ()))),
                     internal_date=data.get(b"INTERNALDATE"),
                     body_structure=data.get(b"BODYSTRUCTURE"),
+                    body_bytes=_body_bytes(data) if self._include_text else None,
                 )
             )
         return ImapFetchResult(
@@ -106,7 +113,22 @@ class ImapConnector:
 
 def _header_bytes(data: dict[Any, Any]) -> bytes:
     for key, value in data.items():
-        if isinstance(key, bytes) and key.startswith(b"BODY[") and isinstance(value, bytes):
+        if (
+            isinstance(key, bytes)
+            and key.startswith(b"BODY[HEADER.FIELDS")
+            and isinstance(value, bytes)
+        ):
+            return value
+    return b""
+
+
+def _body_bytes(data: dict[Any, Any]) -> bytes:
+    for key, value in data.items():
+        if (
+            isinstance(key, bytes)
+            and key.startswith(b"BODY[TEXT]")
+            and isinstance(value, bytes)
+        ):
             return value
     return b""
 

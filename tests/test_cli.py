@@ -149,6 +149,60 @@ def test_explain_assesses_without_saving_or_notifying(tmp_path: Path, monkeypatc
     assert Storage(database_path).recent_assessments() == []
 
 
+def test_explain_can_explicitly_test_configured_cloud_provider(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    database_path = tmp_path / "mail.db"
+    write_config(
+        config_path,
+        database_path,
+        classification="""classification:
+  cloud:
+    enabled: true
+    base_url: https://api.deepseek.com
+    model: deepseek-flash
+    api_key_env: CLI_TEST_CLOUD_KEY
+""",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CLI_TEST_CLOUD_KEY", "secret")
+    seen_text: list[str] = []
+
+    class FakeCloudClassifier:
+        def __init__(self, classification) -> None:
+            assert classification.cloud.model == "deepseek-flash"
+
+        def refine(self, candidate, assessment):
+            seen_text.append(candidate.text_excerpt)
+            return Assessment(88, AlertLevel.IMMEDIATE, ("cloud: needs action",))
+
+    monkeypatch.setattr(
+        "mailsentry.cli.ResponsesCompatibleClassifier", FakeCloudClassifier
+    )
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "explain",
+            "--config",
+            str(config_path),
+            "--sender",
+            "person@example.com",
+            "--subject",
+            "Please review",
+            "--text",
+            "Synthetic message only",
+            "--cloud",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert '"score": 88' in result.output
+    assert seen_text == ["Synthetic message only"]
+    assert Storage(database_path).recent_assessments() == []
+
+
 def test_status_reports_saved_health_without_connecting(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "config.yaml"
     database_path = tmp_path / "mail.db"

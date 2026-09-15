@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from email.header import decode_header, make_header
-from email.parser import BytesHeaderParser
+from email.parser import BytesHeaderParser, BytesParser
 from email.policy import default
 from email.utils import getaddresses, parsedate_to_datetime
+from html.parser import HTMLParser
 from typing import Any
 
 from mailsentry.models import AttachmentMetadata, MailCandidate
+
+MAX_TEXT_EXCERPT_CHARS = 4_000
 
 
 def candidate_from_imap(
@@ -19,6 +22,7 @@ def candidate_from_imap(
     flags: frozenset[str],
     internal_date: datetime | None,
     body_structure: Any,
+    body_bytes: bytes | None = None,
 ) -> MailCandidate:
     headers = BytesHeaderParser(policy=default).parsebytes(header_bytes)
     sender_addresses = getaddresses(headers.get_all("from", []))
@@ -39,6 +43,7 @@ def candidate_from_imap(
         has_priority_header=_has_high_priority_header(headers),
         has_list_unsubscribe="list-unsubscribe" in headers,
         attachments=tuple(_attachments(body_structure)),
+        text_excerpt=_text_excerpt(header_bytes, body_bytes),
     )
 
 
@@ -76,6 +81,53 @@ def _message_date(header: str | None, internal_date: datetime | None) -> datetim
     if internal_date:
         return internal_date if internal_date.tzinfo else internal_date.replace(tzinfo=UTC)
     return datetime.now(UTC)
+
+
+def _text_excerpt(header_bytes: bytes, body_bytes: bytes | None) -> str:
+    if not body_bytes:
+        return ""
+    source = header_bytes.rstrip(b"\r\n") + b"\r\n\r\n" + body_bytes
+    try:
+        message = BytesParser(policy=default).parsebytes(source)
+        part = message.get_body(preferencelist=("plain", "html"))
+        if part is None or part.get_content_disposition() == "attachment":
+            return ""
+        content = part.get_content()
+        if not isinstance(content, str):
+            return ""
+        if part.get_content_type() == "text/html":
+            parser = _SafeHTMLTextExtractor()
+            parser.feed(content)
+            content = parser.text()
+    except (LookupError, UnicodeError, ValueError):
+        return ""
+    return " ".join(content.replace("\x00", " ").split())[:MAX_TEXT_EXCERPT_CHARS]
+
+
+class _SafeHTMLTextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._chunks: list[str] = []
+        self._ignored_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style", "svg"}:
+            self._ignored_depth += 1
+        elif not self._ignored_depth and tag in {"br", "div", "li", "p", "tr"}:
+            self._chunks.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style", "svg"} and self._ignored_depth:
+            self._ignored_depth -= 1
+        elif not self._ignored_depth and tag in {"div", "li", "p", "tr"}:
+            self._chunks.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        if not self._ignored_depth:
+            self._chunks.append(data)
+
+    def text(self) -> str:
+        return "".join(self._chunks)
 
 
 def _attachments(node: Any) -> list[AttachmentMetadata]:

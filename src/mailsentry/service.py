@@ -11,6 +11,7 @@ from datetime import time as wall_time
 from zoneinfo import ZoneInfo
 
 from mailsentry.classifier import RuleClassifier
+from mailsentry.cloud_classifier import ResponsesCompatibleClassifier
 from mailsentry.config import AccountConfig, ServiceConfig
 from mailsentry.connectors import ImapConnector
 from mailsentry.models import AlertLevel, MailCandidate
@@ -42,7 +43,15 @@ class MailSentryService:
         self.config = config
         self.storage = Storage(config.storage.path)
         self.storage.initialize()
-        self.classifier = RuleClassifier(config.classification)
+        cloud = (
+            ResponsesCompatibleClassifier(config.classification)
+            if config.classification.cloud.enabled
+            else None
+        )
+        self.classifier = RuleClassifier(
+            config.classification,
+            refiner=cloud.refine if cloud else None,
+        )
         self.notifier = AppriseNotifier(config.notifications.urls())
         self._clock = clock
         self._wall_clock = wall_clock or _utc_now
@@ -52,7 +61,10 @@ class MailSentryService:
         total = 0
         since = date.today() - timedelta(days=days)
         for account in self.config.accounts:
-            connector = ImapConnector(account)
+            connector = ImapConnector(
+                account,
+                include_text=self.config.classification.cloud.enabled,
+            )
             result = connector.fetch_since(since)
             for candidate in result.candidates:
                 self._record(candidate, notify=False)
@@ -191,7 +203,10 @@ class MailSentryService:
                 f"account {account.id!r} has not been bootstrapped; run bootstrap first"
             )
         uid_validity, last_uid = cursor
-        result = ImapConnector(account).fetch_after(last_uid, uid_validity)
+        result = ImapConnector(
+            account,
+            include_text=self.config.classification.cloud.enabled,
+        ).fetch_after(last_uid, uid_validity)
         for candidate in result.candidates:
             self._record(candidate, notify=True)
             self.storage.set_cursor(account.id, candidate.uid_validity, candidate.uid)

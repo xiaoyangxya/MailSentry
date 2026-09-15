@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from mailsentry.config import ClassificationConfig
 from mailsentry.models import AlertLevel, Assessment, MailCandidate
+
+LOGGER = logging.getLogger(__name__)
+AssessmentRefiner = Callable[[MailCandidate, Assessment], Assessment]
 
 PROTECTED_SUBJECT_SIGNALS = (
     "payment",
@@ -29,8 +34,14 @@ PROTECTED_SUBJECT_SIGNALS = (
 class RuleClassifier:
     """Conservative, explainable classifier used before any optional cloud model."""
 
-    def __init__(self, config: ClassificationConfig) -> None:
+    def __init__(
+        self,
+        config: ClassificationConfig,
+        *,
+        refiner: AssessmentRefiner | None = None,
+    ) -> None:
         self._config = config
+        self._refiner = refiner
 
     def assess(self, candidate: MailCandidate, sender_feedback: int = 0) -> Assessment:
         sender = candidate.sender.lower()
@@ -93,7 +104,17 @@ class RuleClassifier:
             level = AlertLevel.DIGEST
         else:
             level = AlertLevel.AUDIT
-        return Assessment(score, level, tuple(reasons))
+        rule_assessment = Assessment(score, level, tuple(reasons))
+        if self._refiner is None or level is not AlertLevel.DIGEST:
+            return rule_assessment
+        try:
+            return self._refiner(candidate, rule_assessment)
+        except Exception as exc:
+            LOGGER.warning(
+                "cloud assessment failed error=%s; using rule assessment",
+                type(exc).__name__,
+            )
+            return rule_assessment
 
 
 def _matches_sender(sender: str, configured: tuple[str, ...]) -> bool:

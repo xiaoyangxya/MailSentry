@@ -32,6 +32,7 @@ class MailCandidate:
     has_priority_header: bool = False
     has_list_unsubscribe: bool = False
     attachments: tuple[AttachmentMetadata, ...] = ()
+    text_excerpt: str = ""
 
 
 @dataclass(frozen=True, slots=True)

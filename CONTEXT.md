@@ -9,7 +9,9 @@ An external mailbox that MailSentry observes using read-only access.
 _Avoid_: User, inbox, tenant
 
 **Mail Candidate**:
-A newly observed message whose importance has not yet been decided.
+A newly observed message whose importance has not yet been decided. It may carry a
+cleaned text excerpt transiently for an explicitly enabled cloud Assessment, but
+that excerpt is never persisted.
 _Avoid_: Email event, raw email
 
 **Assessment**:

@@ -8,8 +8,8 @@ read-only IMAP access and never marks, moves, or deletes source messages.
 
 > Status: foundational v0.1. The rule engine, SQLite persistence, per-account IMAP
 > IDLE monitoring with five-minute catch-up scans, scheduled digest and immediate
-> Apprise notifications, CLI, and container packaging are available. Optional
-> cloud-model assessment remains on the roadmap.
+> Apprise notifications, CLI, container packaging, and an optional Responses-
+> compatible cloud assessment adapter are available.
 
 ## Quick start
 
@@ -53,6 +53,9 @@ read from environment variables named by that configuration. Use
 `--env-file path\to\secrets.env` before the command name to load another file.
 Never commit `.env`.
 
+For an end-to-end personal Gmail and Discord webhook walkthrough, follow the
+[Gmail and Discord setup guide](docs/setup-gmail-discord.md).
+
 Apprise accepts notification URLs for Telegram, ntfy, Feishu, generic webhooks, and
 many other services. See the [Apprise service documentation](https://appriseit.com/services/).
 
@@ -73,6 +76,38 @@ The `explain` command evaluates these rules and existing sender Feedback without
 saving an Assessment or sending a notification. Add `--provider-important`,
 `--priority-header`, `--bulk`, or repeated `--attachment` options to model signals.
 
+### Optional cloud provider
+
+MailSentry can refine only ambiguous, digest-level rule Assessments through any
+provider that implements the OpenAI Responses endpoint and JSON Schema structured
+output. DeepSeek is the example in `config.example.yaml`; replace `base_url`,
+`model`, and `api_key_env` for another compatible provider:
+
+```yaml
+classification:
+  cloud:
+    enabled: true
+    base_url: https://api.deepseek.com
+    model: deepseek-flash
+    api_key_env: MAILSENTRY_CLOUD_API_KEY
+    timeout_seconds: 15
+```
+
+Put the actual key in `.env` as `MAILSENTRY_CLOUD_API_KEY=...`, never directly in
+YAML. Test the configured API with synthetic input without saving or notifying:
+
+```powershell
+.\.venv\Scripts\mail-sentinel explain --sender test@example.com --subject "Please review" --text "Synthetic test message" --cloud
+```
+
+When enabled, MailSentry fetches message text read-only and sends only the sender,
+subject, attachment metadata, and at most 4,000 cleaned text characters. Account
+aliases, recipients, Message-IDs, attachment content, and credentials are excluded.
+Email fields are treated as untrusted instructions, model output must match a strict
+schema, and timeout or invalid output falls back to the local rule Assessment.
+`bootstrap` also assesses ambiguous recent messages through the configured provider;
+leave cloud classification disabled if historical mail must not leave the VPS.
+
 ## Docker
 
 Start Docker Desktop, create `config.yaml` and `.env`, then run:
@@ -82,10 +117,14 @@ docker compose run --rm mailsentry bootstrap
 docker compose up -d
 ```
 
-Persistent metadata is stored in the `mailsentry-data` volume. Message bodies and
-attachment content are not persisted. Privacy regression tests also enforce that
-transient content, mailbox passwords, and notification tokens stay out of SQLite,
-logs, and default notification text.
+For first server installation, consistent backup and restore, credential rotation,
+upgrades, rollback, log collection, and incident response, follow the
+[operations runbook](docs/operations.md).
+
+Persistent metadata is stored in the `mailsentry-data` volume. Message bodies,
+transient cloud excerpts, and attachment content are not persisted. Privacy
+regression tests also enforce that transient content, mailbox passwords, and
+notification tokens stay out of SQLite, logs, and default notification text.
 
 ## Development
 

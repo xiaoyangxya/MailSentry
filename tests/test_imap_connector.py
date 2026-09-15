@@ -3,7 +3,7 @@ from datetime import date, timedelta
 import pytest
 
 from mailsentry.config import AccountConfig
-from mailsentry.connectors.imap import HEADER_FIELDS, ImapConnector
+from mailsentry.connectors.imap import HEADER_FIELDS, TEXT_PREVIEW_FIELD, ImapConnector
 
 
 class EmptyMailboxClient:
@@ -60,6 +60,42 @@ def account() -> AccountConfig:
 def test_fetch_requests_common_priority_headers() -> None:
     for header_name in ("IMPORTANCE", "X-PRIORITY", "PRIORITY", "X-MSMAIL-PRIORITY"):
         assert header_name in HEADER_FIELDS
+
+
+def test_fetches_text_preview_only_when_cloud_input_is_enabled(monkeypatch) -> None:
+    class MessageClient(EmptyMailboxClient):
+        def __init__(self) -> None:
+            super().__init__(uid_validity=11, uid_next=2)
+            self.fetch_fields: list[str] = []
+
+        def search(self, criteria: list[object]) -> list[int]:
+            return [1]
+
+        def fetch(self, uids: list[int], fields: list[str]):
+            self.fetch_fields = fields
+            return {
+                1: {
+                    b"BODY[HEADER.FIELDS (SUBJECT CONTENT-TYPE)]": (
+                        b"Subject: Hello\r\nContent-Type: text/plain\r\n\r\n"
+                    ),
+                    b"BODY[TEXT]<0>": b"transient body",
+                }
+            }
+
+    plain_client = MessageClient()
+    plain = ImapConnector(account())
+    monkeypatch.setattr(plain, "_client", lambda: plain_client)
+    plain_result = plain.fetch_after(0, 11)
+
+    cloud_client = MessageClient()
+    cloud = ImapConnector(account(), include_text=True)
+    monkeypatch.setattr(cloud, "_client", lambda: cloud_client)
+    cloud_result = cloud.fetch_after(0, 11)
+
+    assert TEXT_PREVIEW_FIELD not in plain_client.fetch_fields
+    assert plain_result.candidates[0].text_excerpt == ""
+    assert TEXT_PREVIEW_FIELD in cloud_client.fetch_fields
+    assert cloud_result.candidates[0].text_excerpt == "transient body"
 
 
 def test_fetch_after_reconciles_changed_uidvalidity_without_candidates(

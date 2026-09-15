@@ -1,5 +1,6 @@
 services:
   mailsentry:
+    image: ${MAILSENTRY_IMAGE:-mailsentry:local}
     build: .
     restart: unless-stopped
     env_file:

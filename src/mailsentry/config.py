@@ -15,6 +15,23 @@ class ConfigurationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class CloudClassificationConfig:
+    enabled: bool = False
+    base_url: str = "https://api.deepseek.com"
+    model: str = ""
+    api_key_env: str = "MAILSENTRY_CLOUD_API_KEY"
+    timeout_seconds: float = 15.0
+
+    def api_key(self) -> str:
+        value = os.getenv(self.api_key_env)
+        if not value:
+            raise ConfigurationError(
+                f"cloud classifier requires environment variable {self.api_key_env!r}"
+            )
+        return value
+
+
+@dataclass(frozen=True, slots=True)
 class AccountConfig:
     id: str
     host: str
@@ -38,6 +55,7 @@ class ClassificationConfig:
     allow_senders: tuple[str, ...] = ()
     deny_senders: tuple[str, ...] = ()
     sender_reputation: tuple[tuple[str, int], ...] = ()
+    cloud: CloudClassificationConfig = field(default_factory=CloudClassificationConfig)
     important_keywords: tuple[str, ...] = (
         "urgent",
         "deadline",
@@ -143,6 +161,37 @@ def _sender_reputation(value: Any) -> tuple[tuple[str, int], ...]:
     return tuple(parsed)
 
 
+def _cloud_classification(value: Any) -> CloudClassificationConfig:
+    raw = _mapping(value, "classification.cloud")
+    enabled = raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ConfigurationError("classification.cloud.enabled must be a boolean")
+    model = str(raw.get("model", "")).strip()
+    base_url = str(raw.get("base_url", "https://api.deepseek.com")).strip().rstrip("/")
+    api_key_env = str(raw.get("api_key_env", "MAILSENTRY_CLOUD_API_KEY")).strip()
+    try:
+        timeout_seconds = float(raw.get("timeout_seconds", 15))
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError("classification.cloud.timeout_seconds must be a number") from exc
+    if enabled and not model:
+        raise ConfigurationError("classification.cloud.model is required when enabled")
+    if not base_url.startswith("https://"):
+        raise ConfigurationError("classification.cloud.base_url must use HTTPS")
+    if not api_key_env:
+        raise ConfigurationError("classification.cloud.api_key_env must not be empty")
+    if not 1 <= timeout_seconds <= 60:
+        raise ConfigurationError(
+            "classification.cloud.timeout_seconds must be between 1 and 60"
+        )
+    return CloudClassificationConfig(
+        enabled=enabled,
+        base_url=base_url,
+        model=model,
+        api_key_env=api_key_env,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 def load_config(path: Path) -> ServiceConfig:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -186,6 +235,7 @@ def load_config(path: Path) -> ServiceConfig:
         allow_senders=tuple(str(v).lower() for v in class_raw.get("allow_senders", [])),
         deny_senders=tuple(str(v).lower() for v in class_raw.get("deny_senders", [])),
         sender_reputation=_sender_reputation(class_raw.get("sender_reputation")),
+        cloud=_cloud_classification(class_raw.get("cloud")),
         important_keywords=tuple(
             str(v).lower()
             for v in class_raw.get("important_keywords", ClassificationConfig().important_keywords)

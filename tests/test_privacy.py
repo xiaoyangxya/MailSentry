@@ -32,12 +32,13 @@ def test_transient_content_and_credentials_stay_out_of_persistent_outputs(
             b"From: sender@example.com\r\n"
             b"To: private-recipient@example.com\r\n"
             b"Subject: Security alert\r\n"
-            b"Importance: high\r\n\r\n"
-            + f"{body_secret}\n{attachment_secret}".encode()
+            b"Importance: high\r\n"
+            b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
         ),
         flags=frozenset(),
         internal_date=datetime(2026, 9, 15, tzinfo=UTC),
         body_structure=None,
+        body_bytes=f"{body_secret}\n{attachment_secret}".encode(),
     )
     database_path = tmp_path / "mail.db"
     configured_urls: list[tuple[str, ...]] = []
@@ -67,6 +68,7 @@ def test_transient_content_and_credentials_stay_out_of_persistent_outputs(
     pending = service.storage.pending_notifications()
     assert configured_urls == [(f"mock://{webhook_secret}",)]
     assert not hasattr(candidate, "body")
+    assert body_secret in candidate.text_excerpt
     assert len(pending) == 1
     assert "Account: personal" in pending[0]["body"]
     assert "From: sender@example.com" in pending[0]["body"]
