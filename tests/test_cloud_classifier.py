@@ -83,6 +83,7 @@ def test_sends_minimal_payload_to_custom_responses_provider(monkeypatch) -> None
     payload = captured["payload"]
     assert payload["model"] == "provider-model"
     assert payload["store"] is False
+    assert payload["reasoning"] == {"effort": "none"}
     assert payload["text"]["format"]["type"] == "json_schema"
     assert payload["text"]["format"]["strict"] is True
     mail_input = json.loads(payload["input"])

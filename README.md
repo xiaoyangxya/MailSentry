@@ -103,7 +103,9 @@ YAML. Test the configured API with synthetic input without saving or notifying:
 When enabled, MailSentry fetches message text read-only and sends only the sender,
 subject, attachment metadata, and at most 4,000 cleaned text characters. Account
 aliases, recipients, Message-IDs, attachment content, and credentials are excluded.
-Email fields are treated as untrusted instructions, model output must match a strict
+Provider reasoning is disabled so the bounded output budget is reserved for the
+short structured result. Email fields are treated as untrusted instructions, model
+output must match a strict
 schema, and timeout or invalid output falls back to the local rule Assessment.
 `bootstrap` also assesses ambiguous recent messages through the configured provider;
 leave cloud classification disabled if historical mail must not leave the VPS.

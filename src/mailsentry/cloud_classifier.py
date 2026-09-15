@@ -82,6 +82,7 @@ def _request(config: CloudClassificationConfig, candidate: MailCandidate) -> Req
         ),
         "input": json.dumps(mail_input, ensure_ascii=False),
         "max_output_tokens": 200,
+        "reasoning": {"effort": "none"},
         "text": {
             "format": {
                 "type": "json_schema",
