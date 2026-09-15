@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -302,3 +303,32 @@ def test_events_rejects_unknown_level(tmp_path: Path, monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert "level must be 'immediate', 'digest', or 'audit'" in result.output
+
+
+def test_soak_command_runs_without_config_or_external_services(tmp_path: Path) -> None:
+    database_path = tmp_path / "soak.db"
+    metrics_path = tmp_path / "soak.jsonl"
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "soak",
+            "--database",
+            str(database_path),
+            "--metrics",
+            str(metrics_path),
+            "--duration-hours",
+            "0.0034",
+            "--event-interval-seconds",
+            "3",
+            "--accelerated",
+        ],
+    )
+
+    assert result.exit_code == 0
+    summary = json.loads(result.output)
+    assert summary["passed"] is True
+    assert summary["release_evidence"] is False
+    assert summary["accounts"] == 10
+    assert database_path.exists()
+    assert metrics_path.exists()

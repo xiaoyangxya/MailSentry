@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Protocol
 
 import apprise
 
 from mailsentry.storage import Storage
+
+
+class NotificationSender(Protocol):
+    def send(self, title: str, body: str) -> bool: ...
 
 
 class AppriseNotifier:
@@ -20,7 +25,7 @@ class AppriseNotifier:
 
 def dispatch_outbox(
     storage: Storage,
-    notifier: AppriseNotifier,
+    notifier: NotificationSender,
     *,
     now: datetime | None = None,
 ) -> tuple[int, int]:

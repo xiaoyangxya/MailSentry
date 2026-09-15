@@ -131,6 +131,55 @@ release notes require it or the old image cannot read the migrated database. Aft
 stabilization, check out the recorded old revision and rebuild it for a durable
 rollback. Retain both snapshot and rollback image through the soak period.
 
+## Run and reconcile the ten-account soak
+
+The soak harness is offline: it creates synthetic headers, attachment metadata,
+flags, Message-IDs, UIDVALIDITY changes, one disconnect, one notification retry,
+and a service reconstruction. It does not read `config.yaml`, load credentials, or
+connect to IMAP, cloud, or notification providers. Use a new output directory and
+the exact image being considered for release:
+
+```bash
+RELEASE_SHA=$(git rev-parse HEAD)
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+SOAK_DIR="$PWD/soak-evidence/$RELEASE_SHA-$STAMP"
+sudo install -d -m 0770 -o 10001 -g "$(id -g)" "$SOAK_DIR"
+docker run --rm --name mailsentry-soak \
+  --read-only --tmpfs /tmp:size=16m --user 10001:10001 \
+  -v "$SOAK_DIR:/soak" mailsentry:local \
+  soak --database /soak/mailsentry-soak.db \
+  --metrics /soak/mailsentry-soak.jsonl \
+  --duration-hours 24 --event-interval-seconds 300 \
+  --accounts 10 --seed 20260915 --rss-limit-mib 512 \
+  | tee "$SOAK_DIR/summary.json"
+```
+
+Leave the foreground process running for 24 hours. Stop an unwanted run with
+Ctrl+C or `docker stop --time 30 mailsentry-soak`; interrupted output is not release
+evidence, and the same paths cannot be reused. For a quick functional rehearsal,
+add `--accelerated`; its summary always reports `release_evidence: false`.
+
+The command exits nonzero on event loss, persisted or delivered duplicates, cursor
+mismatch, an unhealthy outbox, a persisted privacy marker, or peak RSS above the
+limit. A release-eligible result must exit zero and end with one JSON summary where
+`passed` and `release_evidence` are both true, `generated` equals `persisted`,
+`cursor_mismatches`, `duplicate_events`, `duplicate_notifications`, and
+`notifications_pending` are zero, `disconnects` and `notification_failures` are
+one, and `peak_rss_mib` is below 512. Preserve these three files with the frozen
+source SHA:
+
+```bash
+tail -n 1 "$SOAK_DIR/mailsentry-soak.jsonl"
+python -m json.tool "$SOAK_DIR/summary.json"
+sha256sum "$SOAK_DIR"/* > "$SOAK_DIR/SHA256SUMS"
+sudo chown -R "$(id -u):$(id -g)" "$SOAK_DIR"
+```
+
+The JSONL file contains timestamped phase samples with per-account generated and
+observed counts, saved cursors, notification counts, and current/peak RSS, followed
+by the final reconciliation. Attach only these synthetic artifacts to the release
+checklist; never include production databases, configuration, or environment files.
+
 ## Collect logs and respond to incidents
 
 Collect evidence without exporting `.env`, `config.yaml`, databases, or raw mail:

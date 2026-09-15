@@ -8,14 +8,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as wall_time
+from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from mailsentry.classifier import RuleClassifier
 from mailsentry.cloud_classifier import ResponsesCompatibleClassifier
 from mailsentry.config import AccountConfig, ServiceConfig
 from mailsentry.connectors import ImapConnector
+from mailsentry.connectors.imap import ImapFetchResult
 from mailsentry.models import AlertLevel, MailCandidate
-from mailsentry.notifier import AppriseNotifier, dispatch_outbox
+from mailsentry.notifier import AppriseNotifier, NotificationSender, dispatch_outbox
 from mailsentry.storage import Storage
 
 LOGGER = logging.getLogger(__name__)
@@ -32,6 +34,27 @@ class _AccountRetry:
     retry_at: float
 
 
+class MailboxConnector(Protocol):
+    def fetch_since(self, since: date) -> ImapFetchResult: ...
+
+    def fetch_after(
+        self, uid: int, expected_uid_validity: int | None = None
+    ) -> ImapFetchResult: ...
+
+    def wait_for_change(self, timeout: float) -> None: ...
+
+
+ConnectorFactory = Callable[[AccountConfig, bool], MailboxConnector]
+
+
+def _default_connector_factory(
+    account: AccountConfig, include_text: bool
+) -> MailboxConnector:
+    if include_text:
+        return ImapConnector(account, include_text=True)
+    return ImapConnector(account)
+
+
 class MailSentryService:
     def __init__(
         self,
@@ -39,6 +62,10 @@ class MailSentryService:
         *,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], datetime] | None = None,
+        connector_factory: ConnectorFactory = _default_connector_factory,
+        notifier: NotificationSender | None = None,
+        outbox_check_seconds: float = OUTBOX_CHECK_SECONDS,
+        retry_delay: Callable[[int], float] | None = None,
     ) -> None:
         self.config = config
         self.storage = Storage(config.storage.path)
@@ -52,18 +79,24 @@ class MailSentryService:
             config.classification,
             refiner=cloud.refine if cloud else None,
         )
-        self.notifier = AppriseNotifier(config.notifications.urls())
+        self.notifier = (
+            notifier
+            if notifier is not None
+            else AppriseNotifier(config.notifications.urls())
+        )
+        self._connector_factory = connector_factory
         self._clock = clock
         self._wall_clock = wall_clock or _utc_now
+        self._outbox_check_seconds = outbox_check_seconds
+        self._retry_delay = retry_delay or _retry_delay
         self._account_retries: dict[str, _AccountRetry] = {}
 
     def bootstrap(self, days: int = 1) -> int:
         total = 0
         since = date.today() - timedelta(days=days)
         for account in self.config.accounts:
-            connector = ImapConnector(
-                account,
-                include_text=self.config.classification.cloud.enabled,
+            connector = self._connector_factory(
+                account, self.config.classification.cloud.enabled
             )
             result = connector.fetch_since(since)
             for candidate in result.candidates:
@@ -122,10 +155,10 @@ class MailSentryService:
             now=now,
         )
 
-    def _defer_account(self, account_id: str) -> int:
+    def _defer_account(self, account_id: str) -> float:
         previous = self._account_retries.get(account_id)
         failures = 1 if previous is None else previous.failures + 1
-        delay = _retry_delay(failures)
+        delay = self._retry_delay(failures)
         self._account_retries[account_id] = _AccountRetry(
             failures=failures,
             retry_at=self._clock() + delay,
@@ -134,6 +167,12 @@ class MailSentryService:
 
     def run_forever(self) -> None:
         stop_event = threading.Event()
+        try:
+            self.run_until(stop_event)
+        except KeyboardInterrupt:
+            LOGGER.info("shutdown requested")
+
+    def run_until(self, stop_event: threading.Event) -> None:
         outbox_ready = threading.Event()
         workers = [
             threading.Thread(
@@ -159,9 +198,9 @@ class MailSentryService:
                     )
                 except Exception:
                     LOGGER.exception("notification cycle failed")
-                outbox_ready.wait(OUTBOX_CHECK_SECONDS)
-        except KeyboardInterrupt:
-            LOGGER.info("shutdown requested")
+                if stop_event.is_set():
+                    break
+                outbox_ready.wait(self._outbox_check_seconds)
         finally:
             stop_event.set()
             outbox_ready.set()
@@ -183,10 +222,10 @@ class MailSentryService:
                     outbox_ready.set()
                 if stop_event.is_set():
                     break
-                ImapConnector(account).wait_for_change(idle_timeout)
+                self._connector_factory(account, False).wait_for_change(idle_timeout)
             except Exception:
                 failures += 1
-                retry_delay = _retry_delay(failures)
+                retry_delay = self._retry_delay(failures)
                 LOGGER.exception(
                     "account worker failed account=%s retry_in_seconds=%s",
                     account.id,
@@ -203,9 +242,8 @@ class MailSentryService:
                 f"account {account.id!r} has not been bootstrapped; run bootstrap first"
             )
         uid_validity, last_uid = cursor
-        result = ImapConnector(
-            account,
-            include_text=self.config.classification.cloud.enabled,
+        result = self._connector_factory(
+            account, self.config.classification.cloud.enabled
         ).fetch_after(last_uid, uid_validity)
         for candidate in result.candidates:
             self._record(candidate, notify=True)

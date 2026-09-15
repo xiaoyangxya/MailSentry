@@ -17,6 +17,7 @@ from mailsentry.connectors import ImapConnector
 from mailsentry.models import AlertLevel, AttachmentMetadata, MailCandidate
 from mailsentry.notifier import AppriseNotifier
 from mailsentry.service import MailSentryService
+from mailsentry.soak import SoakConfig, run_soak
 from mailsentry.storage import Storage
 
 app = typer.Typer(no_args_is_help=True, help="Monitor mailboxes for important email.")
@@ -146,6 +147,53 @@ def run_service(
         typer.echo(f"observed={observed} delivered={delivered} failed={failed}")
         return
     service.run_forever()
+
+
+@app.command()
+def soak(
+    database: Annotated[
+        Path,
+        typer.Option(help="New SQLite path reserved for synthetic soak data."),
+    ],
+    metrics: Annotated[
+        Path,
+        typer.Option(help="New JSONL path for timestamped soak evidence."),
+    ],
+    duration_hours: Annotated[
+        float,
+        typer.Option(min=0.001, help="Logical and, unless accelerated, wall-clock duration."),
+    ] = 24.0,
+    event_interval_seconds: Annotated[
+        int,
+        typer.Option(min=1, help="Synthetic event interval for each account."),
+    ] = 300,
+    seed: int = 20260915,
+    accounts: Annotated[int, typer.Option(min=1)] = 10,
+    rss_limit_mib: Annotated[int, typer.Option(min=1)] = 512,
+    accelerated: Annotated[
+        bool,
+        typer.Option(help="Run without wall-clock pacing; never valid release evidence."),
+    ] = False,
+) -> None:
+    """Run an offline deterministic multi-account soak and reconcile its evidence."""
+    try:
+        report = run_soak(
+            SoakConfig(
+                database_path=database,
+                metrics_path=metrics,
+                duration_seconds=max(1, round(duration_hours * 60 * 60)),
+                event_interval_seconds=event_interval_seconds,
+                seed=seed,
+                account_count=accounts,
+                accelerated=accelerated,
+                rss_limit_mib=rss_limit_mib,
+            )
+        )
+    except ValueError as exc:
+        _configuration_error(exc)
+    typer.echo(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True))
+    if not report.passed:
+        raise typer.Exit(1)
 
 
 @app.command()

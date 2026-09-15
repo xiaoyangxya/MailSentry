@@ -10,6 +10,7 @@ from mailsentry.config import (
     ServiceConfig,
     StorageConfig,
 )
+from mailsentry.connectors.imap import ImapFetchResult
 from mailsentry.models import AlertLevel, Assessment, MailCandidate
 from mailsentry.service import MailSentryService, _latest_digest_slot
 
@@ -83,6 +84,47 @@ def test_process_once_isolates_account_failures_and_dispatches_outbox(
     assert processed == ["broken", "healthy"]
     assert dispatched == [(service.storage, service.notifier)]
     assert "account processing failed account=broken retry_in_seconds=60" in caplog.text
+
+
+def test_service_uses_injected_external_io_adapters(tmp_path: Path) -> None:
+    current_account = account("personal")
+    connector_calls: list[tuple[str, bool]] = []
+
+    class FakeConnector:
+        def fetch_since(self, since) -> ImapFetchResult:
+            return ImapFetchResult((), uid_validity=7, last_uid=0)
+
+        def fetch_after(self, uid: int, expected_uid_validity: int) -> ImapFetchResult:
+            assert (uid, expected_uid_validity) == (0, 7)
+            return ImapFetchResult((), uid_validity=7, last_uid=0)
+
+        def wait_for_change(self, timeout: float) -> None:
+            raise AssertionError("worker wait is not used by this test")
+
+    def connector_factory(
+        account_config: AccountConfig, include_text: bool
+    ) -> FakeConnector:
+        connector_calls.append((account_config.id, include_text))
+        return FakeConnector()
+
+    class RecordingNotifier:
+        def send(self, title: str, body: str) -> bool:
+            return True
+
+    notifier = RecordingNotifier()
+    service = MailSentryService(
+        ServiceConfig(
+            accounts=(current_account,),
+            storage=StorageConfig(path=tmp_path / "mail.db"),
+        ),
+        connector_factory=connector_factory,
+        notifier=notifier,
+    )
+
+    assert service.bootstrap() == 0
+    assert service.process_once() == (0, 0, 0)
+    assert connector_calls == [("personal", False), ("personal", False)]
+    assert service.notifier is notifier
 
 
 def test_failed_account_uses_exponential_backoff_and_resets_after_success(
@@ -262,6 +304,37 @@ def test_run_forever_starts_one_worker_per_account(
     monkeypatch.setattr(service, "_dispatch_and_retain", stop_supervisor)
 
     service.run_forever()
+
+    assert sorted(started) == ["personal", "work"]
+
+
+def test_run_until_honors_external_stop_event(tmp_path: Path, monkeypatch) -> None:
+    accounts = (account("personal"), account("work"))
+    service = MailSentryService(
+        ServiceConfig(
+            accounts=accounts,
+            storage=StorageConfig(path=tmp_path / "mail.db"),
+        )
+    )
+    stop_event = threading.Event()
+    started: list[str] = []
+
+    def run_worker(
+        account_config: AccountConfig,
+        worker_stop: threading.Event,
+        outbox_ready: threading.Event,
+    ) -> None:
+        assert worker_stop is stop_event
+        started.append(account_config.id)
+
+    def stop_supervisor() -> tuple[int, int]:
+        stop_event.set()
+        return 0, 0
+
+    monkeypatch.setattr(service, "_run_account_worker", run_worker)
+    monkeypatch.setattr(service, "_dispatch_and_retain", stop_supervisor)
+
+    service.run_until(stop_event)
 
     assert sorted(started) == ["personal", "work"]
 

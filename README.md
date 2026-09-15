@@ -121,6 +121,13 @@ For first server installation, consistent backup and restore, credential rotatio
 upgrades, rollback, log collection, and incident response, follow the
 [operations runbook](docs/operations.md).
 
+Before a release, `mail-sentinel soak` can run a deterministic, offline ten-account
+workload through the real workers, classifier, SQLite state, digest, outbox, retry,
+deduplication, and retention paths. It uses only synthetic data and never opens an
+IMAP or notification-provider connection. Use `--accelerated` for a quick regression
+test; accelerated output is explicitly ineligible as 24-hour release evidence. The
+operations runbook contains the isolated VPS command and reconciliation steps.
+
 Persistent metadata is stored in the `mailsentry-data` volume. Message bodies,
 transient cloud excerpts, and attachment content are not persisted. Privacy
 regression tests also enforce that transient content, mailbox passwords, and

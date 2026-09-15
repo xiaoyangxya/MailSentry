@@ -107,6 +107,11 @@ docker compose up -d
 [运维手册](docs/operations.md)执行。手册中的命令适用于 Linux VPS，且每一步都包含
 完成检查。
 
+发布前可以使用 `mail-sentinel soak`，让完全离线、确定性的十账号负载经过真实的
+worker、规则分类、SQLite、摘要、outbox、重试、去重和保留链路。该命令只生成虚构
+数据，不会建立 IMAP 或通知供应商连接。`--accelerated` 适合快速回归，但其输出会
+明确标记为不能充当 24 小时发布证据；隔离的 VPS 命令和对账步骤见运维手册。
+
 邮件元数据存储在 `mailsentry-data` 数据卷中。邮件正文、临时云端摘要和附件内容
 不会持久化；隐私回归测试还会确保临时内容、邮箱密码和通知 token 不会进入
 SQLite、日志或默认通知文本。
