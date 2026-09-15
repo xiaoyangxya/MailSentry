@@ -3,17 +3,52 @@ services:
     image: ${MAILSENTRY_IMAGE:-mailsentry:local}
     build: .
     restart: unless-stopped
-    env_file:
-      - .env
     volumes:
-      - ./config.yaml:/config/config.yaml:ro
+      - ./config.yaml:/config/legacy/config.yaml:ro
+      - ./.env:/config/legacy/.env:ro
+      - mailsentry-config:/config/managed
       - mailsentry-data:/app/data
-    command: ["run", "--config", "/config/config.yaml"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    command:
+      - serve
+      - --managed-dir
+      - /config/managed
+      - --state-database
+      - /app/data/mailsentry.db
+      - --host
+      - 0.0.0.0
+      - --trust-proxy
+      - --legacy-config
+      - /config/legacy/config.yaml
+      - --legacy-env
+      - /config/legacy/.env
     security_opt:
       - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp:size=16m
 
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on:
+      - mailsentry
+    environment:
+      MAILSENTRY_DOMAIN: ${MAILSENTRY_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
+  mailsentry-config:
   mailsentry-data:
+  caddy-data:
+  caddy-config:

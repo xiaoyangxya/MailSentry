@@ -1,0 +1,4 @@
+{$MAILSENTRY_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy mailsentry:8080
+}

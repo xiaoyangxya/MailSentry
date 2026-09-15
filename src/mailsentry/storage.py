@@ -86,27 +86,142 @@ class Storage:
         limit: int = 20,
         *,
         alert_level: str | None = None,
+        offset: int = 0,
     ) -> list[sqlite3.Row]:
         parameters: list[object] = []
         where = ""
         if alert_level is not None:
             where = "WHERE alert_level = ?"
             parameters.append(alert_level)
-        parameters.append(limit)
+        parameters.extend((limit, offset))
         with self._connect() as connection:
             return list(
                 connection.execute(
                     f"""
                     SELECT id, account_id, received_at, sender, subject, score,
-                           alert_level, reasons_json, created_at
+                           alert_level, reasons_json, created_at,
+                           EXISTS(
+                               SELECT 1 FROM feedback
+                               WHERE feedback.event_id = mail_events.id
+                           ) AS feedback_recorded
                     FROM mail_events
                     {where}
                     ORDER BY created_at DESC, id DESC
-                    LIMIT ?
+                    LIMIT ? OFFSET ?
                     """,
                     parameters,
                 ).fetchall()
             )
+
+    def add_audit(
+        self,
+        action: str,
+        target: str,
+        result: str,
+        revision: str | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO admin_audit(action, target, result, revision, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (action, target, result, revision, _now()),
+            )
+
+    def recent_audit(self, limit: int = 50) -> list[sqlite3.Row]:
+        with self._connect() as connection:
+            return list(
+                connection.execute(
+                    """
+                    SELECT action, target, result, revision, created_at
+                    FROM admin_audit ORDER BY id DESC LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            )
+
+    def retry_notification(self, outbox_id: int | None = None) -> int:
+        where = "WHERE delivered_at IS NULL"
+        parameters: tuple[object, ...] = ()
+        if outbox_id is not None:
+            where += " AND id = ?"
+            parameters = (outbox_id,)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE notification_outbox
+                SET attempts = 0, next_attempt_at = NULL, permanently_failed_at = NULL
+                {where}
+                """,
+                parameters,
+            )
+            return int(cursor.rowcount)
+
+    def notification_history(self, limit: int = 50) -> list[sqlite3.Row]:
+        with self._connect() as connection:
+            return list(
+                connection.execute(
+                    """
+                    SELECT id, event_id, attempts, created_at, delivered_at,
+                           next_attempt_at, permanently_failed_at
+                    FROM notification_outbox
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            )
+
+    def save_account_preview(
+        self,
+        revision: str,
+        account_id: str,
+        summary: list[dict[str, object]],
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        current = now or datetime.now(UTC)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO account_previews(
+                    revision, account_id, summary_json, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(revision, account_id) DO UPDATE SET
+                    summary_json = excluded.summary_json,
+                    created_at = excluded.created_at,
+                    expires_at = excluded.expires_at
+                """,
+                (
+                    revision,
+                    account_id,
+                    json.dumps(summary, ensure_ascii=False),
+                    current.isoformat(),
+                    (current + timedelta(hours=1)).isoformat(),
+                ),
+            )
+
+    def account_preview(
+        self,
+        revision: str,
+        account_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> list[dict[str, object]] | None:
+        current = now or datetime.now(UTC)
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM account_previews WHERE expires_at < ?",
+                (current.isoformat(),),
+            )
+            row = connection.execute(
+                """
+                SELECT summary_json FROM account_previews
+                WHERE revision = ? AND account_id = ?
+                """,
+                (revision, account_id),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
 
     def set_cursor(self, account_id: str, uid_validity: int, last_uid: int) -> None:
         with self._connect() as connection:
@@ -354,6 +469,13 @@ class Storage:
             )
         return sender
 
+    def has_feedback(self, event_id: int) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM feedback WHERE event_id = ? LIMIT 1", (event_id,)
+            ).fetchone()
+        return row is not None
+
     def purge(self, retention_days: int, *, now: datetime | None = None) -> int:
         cutoff = (
             (now or datetime.now(UTC)).astimezone(UTC) - timedelta(days=retention_days)
@@ -428,5 +550,23 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
 CREATE TABLE IF NOT EXISTS digest_runs (
     slot_at TEXT PRIMARY KEY,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    target TEXT NOT NULL,
+    result TEXT NOT NULL,
+    revision TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS account_previews (
+    revision TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    PRIMARY KEY(revision, account_id)
 );
 """

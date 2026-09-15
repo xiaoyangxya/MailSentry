@@ -48,8 +48,9 @@ IMAP 后，兼容性检查完成。
 https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN
 ```
 
-取最后两段，转换成 MailSentry 使用的
-[Apprise Discord](https://appriseit.com/services/discord/) 格式：
+Web 向导可直接接收这个 HTTPS URL，并在内部转换为
+[Apprise Discord](https://appriseit.com/services/discord/) 格式。无头安装才需要
+手动转换最后两段：
 
 ```text
 discord://WEBHOOK_ID/WEBHOOK_TOKEN/
@@ -60,7 +61,11 @@ discord://WEBHOOK_ID/WEBHOOK_TOKEN/
 
 ## 4. 配置 MailSentry
 
-`config.yaml` 只写非秘密连接设置：
+在控制面板中选择 Gmail 预设，填写邮箱地址和专用应用密码，然后直接粘贴原始
+Discord HTTPS Webhook。保存为 Configuration Draft 后秘密不会再回显；只有明确
+选择云端 Assessment 时才会启用模型配置。
+
+无头安装继续在 `config.yaml` 中只写非秘密连接设置：
 
 ```yaml
 accounts:
@@ -97,12 +102,15 @@ chmod 600 .env config.yaml
 
 ## 5. 持续监控前验证
 
-在 VPS 上依次验证本地配置、真实 Gmail 登录和 Discord 投递：
+在 Web 草稿中运行只读邮箱测试，明确确认真实 Discord 测试，再检查最近 24 小时
+无通知预览。所有必需测试显示成功后才能激活；激活会建立游标并启动账号 worker。
+
+无头安装可继续在 VPS 上验证本地配置、真实 Gmail 登录和 Discord 投递：
 
 ```bash
-docker compose run --rm --no-deps mailsentry doctor --no-connect
-docker compose run --rm --no-deps mailsentry doctor
-docker compose run --rm --no-deps mailsentry doctor --notify
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env doctor --config /config/legacy/config.yaml --no-connect
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env doctor --config /config/legacy/config.yaml
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env doctor --config /config/legacy/config.yaml --notify
 ```
 
 `--no-connect` 不能证明 Google 已接受凭据。第二条命令必须显示 Gmail 账号
@@ -111,9 +119,9 @@ docker compose run --rm --no-deps mailsentry doctor --notify
 三项都通过后再初始化游标并启动监控：
 
 ```bash
-docker compose run --rm --no-deps mailsentry bootstrap
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env bootstrap --config /config/legacy/config.yaml
 docker compose up -d --wait mailsentry
-docker compose run --rm --no-deps mailsentry status --connect
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env status --config /config/legacy/config.yaml --connect
 ```
 
 容器健康、Gmail 游标已初始化、只读连接成功且 Discord 收到测试消息后，配置完成。

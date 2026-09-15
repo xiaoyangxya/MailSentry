@@ -4,9 +4,8 @@
 
 MailSentry 是一个轻量的个人自托管服务。它以只读方式监控多个邮箱，对新邮件进行可解释评分，并在邮件可能重要时发送通知。它不会把邮件标记为已读、移动或删除邮件。
 
-> 当前状态：基础版 v0.1。规则分类、SQLite 持久化、每账号独立 IMAP IDLE
-> 监控与五分钟补偿扫描、定时摘要与即时 Apprise 通知、CLI 和容器配置已经具备；
-> 同时已提供可选的 Responses 兼容云端评估适配器。
+> 当前状态：v0.2 候选版本开发中。现有监控、CLI、可选云端 Assessment 与运维能力
+> 已加入单所有者认证控制面板、版本化配置与运行时平滑重载。
 
 ## 快速开始
 
@@ -19,8 +18,19 @@ Copy-Item config.example.yaml config.yaml
 Copy-Item .env.example .env
 ```
 
-编辑 `config.yaml` 和 `.env`，然后检查并启动。本地 Python 命令会自动读取
-`.env`，但不会覆盖系统中已经设置的环境变量：
+默认 Web 安装把这两个文件作为旧配置导入模板。构建并启动控制面板：
+
+```powershell
+docker compose up -d --build --wait mailsentry
+docker compose logs --tail 20 mailsentry
+```
+
+打开 [http://127.0.0.1:8080](http://127.0.0.1:8080)，使用日志里仅显示一次的
+初始化路径创建管理员，然后确认脱敏旧配置导入或填写常用设置表单。启用邮箱前必须
+通过只读连接测试和最近 24 小时无通知预览。
+
+无头安装仍可编辑 `config.yaml` 和 `.env` 并使用原 CLI；本地 Python 命令会
+自动读取 `.env`，但不会覆盖系统环境变量：
 
 ```powershell
 .\.venv\Scripts\mail-sentinel doctor --no-connect
@@ -28,6 +38,7 @@ Copy-Item .env.example .env
 .\.venv\Scripts\mail-sentinel doctor --notify
 .\.venv\Scripts\mail-sentinel bootstrap
 .\.venv\Scripts\mail-sentinel run
+.\.venv\Scripts\mail-sentinel serve
 .\.venv\Scripts\mail-sentinel status --connect
 .\.venv\Scripts\mail-sentinel events --limit 20
 .\.venv\Scripts\mail-sentinel explain --sender billing@example.com --subject "Invoice due"
@@ -44,6 +55,10 @@ Copy-Item .env.example .env
 
 非敏感设置放在 `config.yaml`；邮箱密码和 Apprise URL 从配置指定的环境变量读取。
 如需加载其他文件，可在命令名称前使用 `--env-file path\to\secrets.env`。不要提交 `.env`。
+
+确认 Web 导入后，受管目录里的 Configuration Revision 成为唯一配置真源。每个
+不可变 revision 把非秘密 YAML 与权限受限秘密文件分开；秘密输入留空表示保留，
+替换和移除必须显式操作。网页导出永远不含秘密。
 
 个人 Gmail 与 Discord Webhook 的完整接入流程见
 [Gmail 与 Discord 配置指南](docs/setup-gmail-discord.zh-CN.md)。
@@ -97,12 +112,22 @@ classification:
 
 ## Docker
 
-启动 Docker Desktop，创建 `config.yaml` 和 `.env`，然后运行：
+启动 Docker Desktop，创建两个旧配置导入模板，然后运行：
 
 ```powershell
-docker compose run --rm mailsentry bootstrap
-docker compose up -d
+docker compose up -d --build --wait mailsentry
+docker compose logs --tail 20 mailsentry
 ```
+
+默认只在 `127.0.0.1:8080` 暴露面板。需要项目自带 HTTPS 时，设置
+`MAILSENTRY_DOMAIN` 并启用可选 Caddy profile：
+
+```powershell
+docker compose --profile https up -d --build --wait
+```
+
+也可以接入已有反向代理或私有 Tunnel。非回环远程明文 HTTP 默认会被拒绝。
+遗忘密码或丢失 TOTP 设备时，只能在服务器运行 `mail-sentinel reset-admin`。
 
 服务器首次安装、一致性备份与恢复、凭据轮换、升级回滚、日志收集和事故处置，请按
 [运维手册](docs/operations.md)执行。手册中的命令适用于 Linux VPS，且每一步都包含
@@ -113,7 +138,8 @@ worker、规则分类、SQLite、摘要、outbox、重试、去重和保留链�
 数据，不会建立 IMAP 或通知供应商连接。`--accelerated` 适合快速回归，但其输出会
 明确标记为不能充当 24 小时发布证据；隔离的 VPS 命令和对账步骤见运维手册。
 
-邮件元数据存储在 `mailsentry-data` 数据卷中。邮件正文、临时云端摘要和附件内容
+邮件元数据存储在 `mailsentry-data` 数据卷中，受管 Configuration Revision
+存储在 `mailsentry-config`。邮件正文、临时云端摘要和附件内容
 不会持久化；隐私回归测试还会确保临时内容、邮箱密码和通知 token 不会进入
 SQLite、日志或默认通知文本。
 

@@ -4,6 +4,21 @@ MailSentry identifies noteworthy incoming email across personally controlled mai
 
 ## Language
 
+**Owner**:
+The sole person authorized to configure a MailSentry deployment, inspect its
+Assessments, and receive its notifications.
+_Avoid_: User, tenant, operator
+
+**Configuration Draft**:
+A complete but inactive set of MailSentry settings and secret references that the
+Owner can validate before it affects monitoring.
+_Avoid_: Pending config, temporary settings
+
+**Configuration Revision**:
+An immutable, identifiable configuration that has either been staged as a
+Configuration Draft or activated for monitoring.
+_Avoid_: Profile, deployment
+
 **Monitored Account**:
 An external mailbox that MailSentry observes using read-only access.
 _Avoid_: User, inbox, tenant

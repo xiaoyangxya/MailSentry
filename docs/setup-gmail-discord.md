@@ -55,8 +55,9 @@ The copied URL has this shape:
 https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN
 ```
 
-Convert its final two components to the [Apprise Discord](https://appriseit.com/services/discord/)
-form used by MailSentry:
+The Web wizard accepts this HTTPS URL directly and converts it to the
+[Apprise Discord](https://appriseit.com/services/discord/) form internally.
+Headless installations must convert its final two components:
 
 ```text
 discord://WEBHOOK_ID/WEBHOOK_TOKEN/
@@ -68,7 +69,13 @@ untrusted email and should not be allowed to trigger Discord mentions.
 
 ## 4. Configure MailSentry
 
-Put only non-secret connection settings in `config.yaml`:
+In the control panel, choose the Gmail preset, enter the mailbox address and
+dedicated app password, then paste the original Discord HTTPS webhook. Save a
+Configuration Draft; secrets are not shown again. The model section remains
+disabled unless cloud Assessment is explicitly selected.
+
+For a headless installation, put only non-secret connection settings in
+`config.yaml`:
 
 ```yaml
 accounts:
@@ -105,12 +112,17 @@ Multiple Apprise destinations may be comma-separated in
 
 ## 5. Validate before continuous monitoring
 
-On the VPS, validate configuration, a real Gmail login, and Discord delivery:
+In the Web draft, run the read-only mailbox test, explicitly confirm the real
+Discord test, and review the 24-hour no-notification mailbox preview. Activate only
+after all required test buttons show success. The dashboard then establishes the
+cursor and starts the account worker.
+
+For a headless installation, validate from the VPS:
 
 ```bash
-docker compose run --rm --no-deps mailsentry doctor --no-connect
-docker compose run --rm --no-deps mailsentry doctor
-docker compose run --rm --no-deps mailsentry doctor --notify
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env doctor --config /config/legacy/config.yaml --no-connect
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env doctor --config /config/legacy/config.yaml
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env doctor --config /config/legacy/config.yaml --notify
 ```
 
 `--no-connect` does not prove Google accepted the credential. The second command
@@ -120,9 +132,9 @@ one test message to the intended Discord channel.
 Initialize the cursor and start monitoring only after all three checks pass:
 
 ```bash
-docker compose run --rm --no-deps mailsentry bootstrap
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env bootstrap --config /config/legacy/config.yaml
 docker compose up -d --wait mailsentry
-docker compose run --rm --no-deps mailsentry status --connect
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env status --config /config/legacy/config.yaml --connect
 ```
 
 Setup is complete when the container is healthy, the Gmail cursor is initialized,

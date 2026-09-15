@@ -4,6 +4,8 @@ poll_seconds: 300
 
 accounts:
   - id: personal
+    connector: imap
+    enabled: true
     host: imap.example.com
     port: 993
     username: you@example.com

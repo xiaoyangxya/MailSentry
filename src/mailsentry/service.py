@@ -90,30 +90,49 @@ class MailSentryService:
         self._outbox_check_seconds = outbox_check_seconds
         self._retry_delay = retry_delay or _retry_delay
         self._account_retries: dict[str, _AccountRetry] = {}
+        self._health_lock = threading.Lock()
+        self._account_health: dict[str, dict[str, str | None]] = {
+            account.id: {"status": "starting", "last_cycle": None, "error": None}
+            for account in self.enabled_accounts
+        }
+
+    @property
+    def enabled_accounts(self) -> tuple[AccountConfig, ...]:
+        return tuple(account for account in self.config.accounts if account.enabled)
+
+    def health(self) -> dict[str, dict[str, str | None]]:
+        with self._health_lock:
+            return {
+                account_id: dict(fields)
+                for account_id, fields in self._account_health.items()
+            }
 
     def bootstrap(self, days: int = 1) -> int:
         total = 0
-        since = date.today() - timedelta(days=days)
-        for account in self.config.accounts:
-            connector = self._connector_factory(
-                account, self.config.classification.cloud.enabled
-            )
-            result = connector.fetch_since(since)
-            for candidate in result.candidates:
-                self._record(candidate, notify=False)
-                total += 1
-            self.storage.set_cursor(account.id, result.uid_validity, result.last_uid)
-            LOGGER.info(
-                "bootstrapped account=%s candidates=%s last_uid=%s",
-                account.id,
-                len(result.candidates),
-                result.last_uid,
-            )
+        for account in self.enabled_accounts:
+            total += self.bootstrap_account(account, days)
         return total
+
+    def bootstrap_account(self, account: AccountConfig, days: int = 1) -> int:
+        since = date.today() - timedelta(days=days)
+        connector = self._connector_factory(
+            account, self.config.classification.cloud.enabled
+        )
+        result = connector.fetch_since(since)
+        for candidate in result.candidates:
+            self._record(candidate, notify=False)
+        self.storage.set_cursor(account.id, result.uid_validity, result.last_uid)
+        LOGGER.info(
+            "bootstrapped account=%s candidates=%s last_uid=%s",
+            account.id,
+            len(result.candidates),
+            result.last_uid,
+        )
+        return len(result.candidates)
 
     def process_once(self) -> tuple[int, int, int]:
         observed = 0
-        for account in self.config.accounts:
+        for account in self.enabled_accounts:
             retry = self._account_retries.get(account.id)
             if retry is not None and self._clock() < retry.retry_at:
                 continue
@@ -181,7 +200,7 @@ class MailSentryService:
                 name=f"mailsentry-{account.id}",
                 daemon=True,
             )
-            for account in self.config.accounts
+            for account in self.enabled_accounts
         ]
         for worker in workers:
             worker.start()
@@ -223,9 +242,10 @@ class MailSentryService:
                 if stop_event.is_set():
                     break
                 self._connector_factory(account, False).wait_for_change(idle_timeout)
-            except Exception:
+            except Exception as exc:
                 failures += 1
                 retry_delay = self._retry_delay(failures)
+                self._set_health(account.id, "retrying", type(exc).__name__)
                 LOGGER.exception(
                     "account worker failed account=%s retry_in_seconds=%s",
                     account.id,
@@ -234,6 +254,15 @@ class MailSentryService:
                 stop_event.wait(retry_delay)
             else:
                 failures = 0
+                self._set_health(account.id, "watching", None)
+
+    def _set_health(self, account_id: str, status: str, error: str | None) -> None:
+        with self._health_lock:
+            self._account_health[account_id] = {
+                "status": status,
+                "last_cycle": self._wall_clock().isoformat(),
+                "error": error,
+            }
 
     def _process_account(self, account: AccountConfig) -> int:
         cursor = self.storage.get_cursor(account.id)

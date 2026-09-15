@@ -38,7 +38,10 @@ jobs:
           python -m pip install ".[dev]"
 
       - name: Verify installed command
-        run: mail-sentinel --help
+        run: |
+          mail-sentinel --help
+          mail-sentinel serve --help
+          mail-sentinel reset-admin --help
 
       - name: Run Ruff
         run: python -m ruff check .

@@ -21,9 +21,10 @@ class CloudClassificationConfig:
     model: str = ""
     api_key_env: str = "MAILSENTRY_CLOUD_API_KEY"
     timeout_seconds: float = 15.0
+    _api_key: str | None = field(default=None, repr=False, compare=False)
 
     def api_key(self) -> str:
-        value = os.getenv(self.api_key_env)
+        value = self._api_key or os.getenv(self.api_key_env)
         if not value:
             raise ConfigurationError(
                 f"cloud classifier requires environment variable {self.api_key_env!r}"
@@ -37,12 +38,15 @@ class AccountConfig:
     host: str
     username: str
     password_env: str
+    connector: str = "imap"
+    enabled: bool = True
     port: int = 993
     folder: str = "INBOX"
     tls: bool = True
+    _password: str | None = field(default=None, repr=False, compare=False)
 
     def password(self) -> str:
-        value = os.getenv(self.password_env)
+        value = self._password or os.getenv(self.password_env)
         if not value:
             raise ConfigurationError(
                 f"account {self.id!r} requires environment variable {self.password_env!r}"
@@ -83,8 +87,11 @@ class ClassificationConfig:
 class NotificationConfig:
     urls_env: str = "MAILSENTRY_APPRISE_URLS"
     digest_times: tuple[time, ...] = (time(9), time(18))
+    _urls: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
 
     def urls(self) -> tuple[str, ...]:
+        if self._urls is not None:
+            return self._urls
         raw = os.getenv(self.urls_env, "")
         return tuple(item.strip() for item in raw.split(",") if item.strip())
 
@@ -161,7 +168,9 @@ def _sender_reputation(value: Any) -> tuple[tuple[str, int], ...]:
     return tuple(parsed)
 
 
-def _cloud_classification(value: Any) -> CloudClassificationConfig:
+def _cloud_classification(
+    value: Any, secrets: dict[str, str] | None = None
+) -> CloudClassificationConfig:
     raw = _mapping(value, "classification.cloud")
     enabled = raw.get("enabled", False)
     if not isinstance(enabled, bool):
@@ -189,10 +198,11 @@ def _cloud_classification(value: Any) -> CloudClassificationConfig:
         model=model,
         api_key_env=api_key_env,
         timeout_seconds=timeout_seconds,
+        _api_key=(secrets or {}).get(api_key_env),
     )
 
 
-def load_config(path: Path) -> ServiceConfig:
+def load_config(path: Path, *, secrets: dict[str, str] | None = None) -> ServiceConfig:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except OSError as exc:
@@ -215,9 +225,12 @@ def load_config(path: Path) -> ServiceConfig:
                 host=str(account["host"]),
                 username=str(account["username"]),
                 password_env=str(account["password_env"]),
+                connector=str(account.get("connector", "imap")),
+                enabled=account.get("enabled", True),
                 port=int(account.get("port", 993)),
                 folder=str(account.get("folder", "INBOX")),
                 tls=bool(account.get("tls", True)),
+                _password=(secrets or {}).get(str(account["password_env"])),
             )
         except KeyError as exc:
             raise ConfigurationError(
@@ -225,6 +238,12 @@ def load_config(path: Path) -> ServiceConfig:
             ) from exc
         if not parsed.tls:
             raise ConfigurationError(f"account {parsed.id!r} must use TLS")
+        if parsed.connector != "imap":
+            raise ConfigurationError(
+                f"account {parsed.id!r} uses unsupported connector {parsed.connector!r}"
+            )
+        if not isinstance(parsed.enabled, bool):
+            raise ConfigurationError(f"account {parsed.id!r} enabled must be a boolean")
         if parsed.id in seen_ids:
             raise ConfigurationError(f"duplicate account id {parsed.id!r}")
         seen_ids.add(parsed.id)
@@ -235,7 +254,7 @@ def load_config(path: Path) -> ServiceConfig:
         allow_senders=tuple(str(v).lower() for v in class_raw.get("allow_senders", [])),
         deny_senders=tuple(str(v).lower() for v in class_raw.get("deny_senders", [])),
         sender_reputation=_sender_reputation(class_raw.get("sender_reputation")),
-        cloud=_cloud_classification(class_raw.get("cloud")),
+        cloud=_cloud_classification(class_raw.get("cloud"), secrets),
         important_keywords=tuple(
             str(v).lower()
             for v in class_raw.get("important_keywords", ClassificationConfig().important_keywords)
@@ -263,6 +282,18 @@ def load_config(path: Path) -> ServiceConfig:
         notifications=NotificationConfig(
             urls_env=str(notify_raw.get("urls_env", "MAILSENTRY_APPRISE_URLS")),
             digest_times=_digest_times(notify_raw.get("digest_times")),
+            _urls=tuple(
+                item.strip()
+                for item in (secrets or {})
+                .get(
+                    str(notify_raw.get("urls_env", "MAILSENTRY_APPRISE_URLS")),
+                    "",
+                )
+                .split(",")
+                if item.strip()
+            )
+            if secrets is not None
+            else None,
         ),
         storage=StorageConfig(
             path=Path(storage_raw.get("path", "data/mailsentry.db")),

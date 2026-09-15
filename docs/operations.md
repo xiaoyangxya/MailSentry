@@ -7,7 +7,7 @@ the directory containing `compose.yaml`; replace angle-bracket placeholders firs
 
 1. Install Docker Engine and the Compose plugin from Docker's official instructions.
    Confirm `docker version` and `docker compose version` succeed.
-2. Clone a reviewed revision and create local-only configuration:
+2. Clone a reviewed revision and create local-only legacy import templates:
 
    ```bash
    git clone https://github.com/xiaoyangxya/MailSentry.git
@@ -18,23 +18,43 @@ the directory containing `compose.yaml`; replace angle-bracket placeholders firs
    chmod 600 config.yaml .env
    ```
 
-3. Edit both files. Mailbox passwords, webhook URLs, and cloud API keys belong in
-   `.env`; keep `.env`, `config.yaml`, databases, and real mail data out of Git and
-   terminal output.
-4. Build, validate, bootstrap the read-only cursor, and start:
+3. Protect both files. Existing deployments may leave their reviewed values in
+   place for confirmed import; new deployments can keep the examples until the Web
+   wizard creates the first Configuration Draft.
+4. Build and start the localhost-only control panel:
 
    ```bash
-   docker compose build --pull mailsentry
-   docker compose run --rm --no-deps mailsentry doctor --no-connect
-   docker compose run --rm --no-deps mailsentry doctor --notify
-   docker compose run --rm --no-deps mailsentry bootstrap
-   docker compose up -d --wait mailsentry
-   docker compose run --rm --no-deps mailsentry status --connect
-   docker compose logs --since 10m --timestamps mailsentry
+   docker compose up -d --build --wait mailsentry
+   docker compose logs --tail 20 mailsentry
+   curl -fsS http://127.0.0.1:8080/healthz
    ```
 
-Installation is complete when the container is healthy, all Monitored Accounts are
-initialized and connect, and the notification test arrives.
+5. Open the one-time setup path from the logs through `127.0.0.1:8080`, an SSH
+   tunnel, or the configured HTTPS proxy. Create the administrator, confirm an
+   import or enter settings, run each integration test, preview 24 hours of each
+   new mailbox, and activate the tested revision.
+
+Installation is complete when the dashboard reports the active revision and
+running workers, each Monitored Account has a cursor, and the test notification
+arrives.
+
+For public access, point a DNS name at the host, set `MAILSENTRY_DOMAIN`, and
+start the optional HTTPS profile:
+
+```bash
+export MAILSENTRY_DOMAIN=mail.example.com
+docker compose --profile https up -d --build --wait
+```
+
+Alternatively keep the localhost binding and use an SSH tunnel, existing reverse
+proxy, or private tunnel. Never expose port 8080 directly to the public Internet.
+If the administrator password or TOTP device is lost, recover only from the server:
+
+```bash
+docker compose exec -T mailsentry mail-sentinel reset-admin \
+  --state-database /app/data/mailsentry.db \
+  --managed-dir /config/managed
+```
 
 ## Create a consistent backup
 
@@ -56,9 +76,20 @@ chmod 600 "backups/mailsentry-$STAMP.db"
 sha256sum "backups/mailsentry-$STAMP.db" > "backups/mailsentry-$STAMP.db.sha256"
 ```
 
-The integrity command must print `ok`. Copy the database and checksum to encrypted,
-access-controlled storage on another host. Back up `.env` and `config.yaml`
-separately as secrets; never attach them to issues or log bundles.
+The integrity command must print `ok`. The `mailsentry-config` volume contains
+restricted Configuration Revision secrets and must be backed up separately into
+encrypted, access-controlled storage:
+
+```bash
+docker compose exec -T mailsentry tar -C /config/managed -czf - . \
+  > "backups/mailsentry-managed-$STAMP.tgz"
+chmod 600 "backups/mailsentry-managed-$STAMP.tgz"
+sha256sum "backups/mailsentry-managed-$STAMP.tgz" \
+  > "backups/mailsentry-managed-$STAMP.tgz.sha256"
+```
+
+Never attach the database, managed archive, `.env`, or `config.yaml` to Issues
+or log bundles. A redacted Web export is not a secret backup.
 
 ## Restore a backup
 
@@ -73,23 +104,42 @@ docker compose run --rm --no-deps --user 0:0 \
   -v "$PWD/backups:/backup:ro" -e BACKUP_FILE="$BACKUP_FILE" \
   --entrypoint python mailsentry -c "import os, pathlib, shutil, sqlite3; source=pathlib.Path('/backup') / os.environ['BACKUP_FILE']; check=sqlite3.connect(f'file:{source}?mode=ro', uri=True).execute('PRAGMA integrity_check').fetchone()[0]; assert check == 'ok', check; target=pathlib.Path('/app/data/mailsentry.db'); [path.unlink(missing_ok=True) for path in (target, pathlib.Path(str(target) + '-wal'), pathlib.Path(str(target) + '-shm'))]; shutil.copyfile(source, target); os.chown(target, 10001, 10001); os.chmod(target, 0o600)"
 docker compose up -d --wait mailsentry
-docker compose run --rm --no-deps mailsentry doctor --no-connect
-docker compose run --rm --no-deps mailsentry status --connect
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env doctor --config /config/legacy/config.yaml --no-connect
+docker compose run --rm --no-deps mailsentry --env-file /config/legacy/.env status --config /config/legacy/config.yaml --connect
 ```
 
 Recovery is complete when checksum and integrity checks pass, the container is
 healthy, saved cursors exist, and all read-only account connections succeed.
+
+When restoring the matching managed archive, verify its checksum, stop the
+application, and restore into the existing configuration volume without exposing
+the archive contents:
+
+```bash
+MANAGED_ARCHIVE=<mailsentry-managed-timestamp.tgz>
+sha256sum -c "backups/$MANAGED_ARCHIVE.sha256"
+docker compose stop mailsentry
+docker compose run --rm --no-deps --user 10001:10001 \
+  -v "$PWD/backups:/backup:ro" -e MANAGED_ARCHIVE="$MANAGED_ARCHIVE" \
+  --entrypoint sh mailsentry \
+  -c 'find /config/managed -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + &&
+      tar -C /config/managed -xzf "/backup/$MANAGED_ARCHIVE"'
+docker compose up -d --wait mailsentry
+curl -fsS http://127.0.0.1:8080/healthz
+```
+
+This is intentionally a server-side disaster-recovery operation. The Web UI does
+not provide restore, factory-reset, or arbitrary history deletion actions.
 
 ## Rotate credentials
 
 Rotate one credential at a time:
 
 1. Create the replacement mailbox app password, Apprise URL/token, or cloud API key.
-2. Update only its named variable in `.env`, retaining mode `0600`.
-3. Run `docker compose up -d --force-recreate --wait mailsentry`, followed by
-   `doctor --no-connect`, `status --connect`, and recent logs.
-4. For Apprise also run `doctor --notify`; for a cloud key run `explain --cloud`
-   with synthetic content as shown in the README.
+2. In the Web configuration page, replace only that secret in a new Configuration
+   Draft. Blank fields retain the current value.
+3. Run the relevant read-only mailbox, real notification, or synthetic cloud test.
+4. Activate the tested revision and confirm dashboard worker health.
 5. Revoke the old credential only after validation. On failure, restore the prior
    environment value and recreate the service without printing either secret.
 
@@ -113,8 +163,7 @@ git fetch --tags --prune
 git checkout --detach "$TARGET_REF"
 docker compose build --pull mailsentry
 docker compose up -d --wait mailsentry
-docker compose run --rm --no-deps mailsentry doctor --no-connect
-docker compose run --rm --no-deps mailsentry status --connect
+curl -fsS http://127.0.0.1:8080/healthz
 docker compose logs --since 10m --timestamps mailsentry
 ```
 
@@ -123,7 +172,7 @@ If health or behavior regresses, run the preserved image immediately:
 ```bash
 MAILSENTRY_IMAGE="mailsentry:rollback-$STAMP" \
   docker compose up -d --no-build --force-recreate --wait mailsentry
-docker compose run --rm --no-deps mailsentry status --connect
+curl -fsS http://127.0.0.1:8080/healthz
 ```
 
 Fast rollback keeps the current database. Restore the pre-upgrade snapshot only if
@@ -186,7 +235,7 @@ Collect evidence without exporting `.env`, `config.yaml`, databases, or raw mail
 
 ```bash
 docker compose ps
-docker compose run --rm --no-deps mailsentry status
+curl -fsS http://127.0.0.1:8080/healthz
 docker compose logs --since 1h --timestamps --no-color mailsentry > mailsentry.log
 docker inspect --format '{{json .State.Health}}' "$(docker compose ps -q mailsentry)"
 git rev-parse HEAD
@@ -200,9 +249,8 @@ Use this order:
    is unexpected; revoke exposed mailbox, notification, or cloud credentials.
 2. **Preserve:** record UTC times and versions; take a consistent backup unless the
    database itself is suspected. Keep evidence private.
-3. **Diagnose:** use `status --connect` for IMAP, `doctor --notify` for delivery,
-   and synthetic `explain --cloud` for cloud failures. Check pending and permanently
-   failed notification counts before restarting.
+3. **Diagnose:** use dashboard worker status and explicit integration tests. Check
+   pending and permanently failed notification counts before restarting.
 4. **Recover:** rotate affected credentials, restore or roll back if required,
    recreate the service, and repeat health checks.
 5. **Close:** confirm new mail advances every account cursor, expected notifications

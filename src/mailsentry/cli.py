@@ -10,6 +10,8 @@ from typing import Annotated
 import typer
 from dotenv import load_dotenv
 
+from mailsentry.application import ControlPanel
+from mailsentry.auth import AuthManager
 from mailsentry.classifier import RuleClassifier
 from mailsentry.cloud_classifier import ResponsesCompatibleClassifier
 from mailsentry.config import ConfigurationError, load_config
@@ -83,6 +85,9 @@ def doctor(
     storage = Storage(settings.storage.path)
     storage.initialize()
     for account in settings.accounts:
+        if not account.enabled:
+            typer.echo(f"OK account={account.id} enabled=false")
+            continue
         try:
             account.password()
         except ConfigurationError as exc:
@@ -231,7 +236,10 @@ def explain(
     storage = Storage(settings.storage.path)
     storage.initialize()
     candidate = MailCandidate(
-        account_id=settings.accounts[0].id,
+        account_id=next(
+            (account.id for account in settings.accounts if account.enabled),
+            settings.accounts[0].id,
+        ),
         uid=0,
         uid_validity=0,
         message_id=None,
@@ -300,6 +308,89 @@ def feedback(
 
 
 @app.command()
+def serve(
+    managed_dir: Annotated[
+        Path,
+        typer.Option(help="Writable directory for managed configuration revisions."),
+    ] = Path("data/managed"),
+    state_database: Annotated[
+        Path,
+        typer.Option(help="SQLite path for events and control-panel state."),
+    ] = Path("data/mailsentry.db"),
+    host: str = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8080,
+    trust_proxy: Annotated[
+        bool,
+        typer.Option(help="Trust X-Forwarded-Proto from the configured reverse proxy."),
+    ] = False,
+    allow_insecure_http: Annotated[
+        bool,
+        typer.Option(help="Allow non-loopback HTTP. Intended only for isolated networks."),
+    ] = False,
+    legacy_config: Annotated[
+        Path | None,
+        typer.Option(help="Optional legacy YAML to offer for confirmed import."),
+    ] = None,
+    legacy_env: Annotated[
+        Path | None,
+        typer.Option(help="Optional legacy dotenv file to import without overwriting it."),
+    ] = None,
+) -> None:
+    """Run the authenticated Web control panel and mailbox workers."""
+    import uvicorn
+
+    from mailsentry.web import create_app
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    panel = ControlPanel(managed_dir, state_database)
+    setup_token = panel.auth.issue_setup_token()
+    if setup_token:
+        setup_location = (
+            f"http://{host}:{port}/setup?token={setup_token}"
+            if host in {"127.0.0.1", "::1", "localhost"}
+            else f"/setup?token={setup_token}"
+        )
+        typer.echo(
+            "Administrator setup URL (valid for 15 minutes, shown once): "
+            f"{setup_location}",
+            err=True,
+        )
+    uvicorn.run(
+        create_app(
+            panel,
+            legacy_config=legacy_config,
+            legacy_env=legacy_env,
+            trust_proxy=trust_proxy,
+            allow_insecure_http=allow_insecure_http,
+        ),
+        host=host,
+        port=port,
+        proxy_headers=trust_proxy,
+        forwarded_allow_ips="*" if trust_proxy else None,
+        access_log=False,
+    )
+
+
+@app.command("reset-admin")
+def reset_admin(
+    state_database: Annotated[
+        Path,
+        typer.Option(help="SQLite path used by the control panel."),
+    ] = Path("data/mailsentry.db"),
+    managed_dir: Annotated[
+        Path,
+        typer.Option(help="Managed configuration directory."),
+    ] = Path("data/managed"),
+) -> None:
+    """Reset the administrator password, sessions, and TOTP from the server."""
+    manager = AuthManager(state_database, managed_dir / "totp.secret")
+    typer.echo(f"Temporary administrator password: {manager.reset()}")
+
+
+@app.command()
 def purge(
     config: ConfigPath = DEFAULT_CONFIG,
 ) -> None:
@@ -328,6 +419,17 @@ def status(
     storage.initialize()
     connection_failed = False
     for account in settings.accounts:
+        if not account.enabled:
+            typer.echo(
+                json.dumps(
+                    {
+                        "account": account.id,
+                        "enabled": False,
+                        "connection": "not-checked",
+                    }
+                )
+            )
+            continue
         cursor = storage.account_status(account.id)
         fields = {
             "account": account.id,

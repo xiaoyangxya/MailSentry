@@ -12,14 +12,14 @@ RUN python -m pip install --upgrade pip && python -m pip install .
 
 RUN addgroup --system --gid 10001 mailsentry \
     && adduser --system --uid 10001 --ingroup mailsentry mailsentry \
-    && mkdir -p /config /app/data \
+    && mkdir -p /config/managed /app/data \
     && chown -R mailsentry:mailsentry /config /app/data
 
 USER mailsentry
 VOLUME ["/app/data"]
 
 HEALTHCHECK --interval=1m --timeout=10s --start-period=20s --retries=3 \
-  CMD ["mail-sentinel", "doctor", "--config", "/config/config.yaml", "--no-connect"]
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]
 
 ENTRYPOINT ["mail-sentinel"]
-CMD ["run", "--config", "/config/config.yaml"]
+CMD ["serve", "--managed-dir", "/config/managed", "--state-database", "/app/data/mailsentry.db", "--host", "0.0.0.0", "--trust-proxy", "--legacy-config", "/config/legacy/config.yaml", "--legacy-env", "/config/legacy/.env"]

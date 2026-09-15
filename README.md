@@ -6,10 +6,9 @@ MailSentry is a lightweight, self-hosted service that watches multiple mailboxes
 assesses incoming messages, and notifies you when an email looks important. It uses
 read-only IMAP access and never marks, moves, or deletes source messages.
 
-> Status: foundational v0.1. The rule engine, SQLite persistence, per-account IMAP
-> IDLE monitoring with five-minute catch-up scans, scheduled digest and immediate
-> Apprise notifications, CLI, container packaging, and an optional Responses-
-> compatible cloud assessment adapter are available.
+> Status: v0.2 release-candidate development. The existing monitor, CLI, optional
+> cloud Assessment, and operations tooling now include a single-Owner authenticated
+> Web control panel with revisioned configuration and graceful runtime reload.
 
 ## Quick start
 
@@ -22,9 +21,22 @@ Copy-Item config.example.yaml config.yaml
 Copy-Item .env.example .env
 ```
 
-Edit `config.yaml` and `.env`, then validate the setup. Local Python commands
-automatically load `.env` without overriding variables already present in the
-environment:
+For the default Web setup, leave these files as import templates, build the image,
+and start the control panel:
+
+```powershell
+docker compose up -d --build --wait mailsentry
+docker compose logs --tail 20 mailsentry
+```
+
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and use the one-time setup path
+printed in the logs. Create the administrator, then either confirm the redacted
+legacy import or complete the common-settings form. An enabled mailbox must pass
+its read-only connection test and 24-hour no-notification preview before activation.
+
+For a headless installation, edit `config.yaml` and `.env` and use the existing
+CLI workflow. Local Python commands load `.env` without overriding variables
+already present in the environment:
 
 ```powershell
 .\.venv\Scripts\mail-sentinel doctor --no-connect
@@ -32,6 +44,7 @@ environment:
 .\.venv\Scripts\mail-sentinel doctor --notify
 .\.venv\Scripts\mail-sentinel bootstrap
 .\.venv\Scripts\mail-sentinel run
+.\.venv\Scripts\mail-sentinel serve
 .\.venv\Scripts\mail-sentinel status --connect
 .\.venv\Scripts\mail-sentinel events --limit 20
 .\.venv\Scripts\mail-sentinel explain --sender billing@example.com --subject "Invoice due"
@@ -52,6 +65,12 @@ Non-secret settings belong in `config.yaml`. Account passwords and Apprise URLs 
 read from environment variables named by that configuration. Use
 `--env-file path\to\secrets.env` before the command name to load another file.
 Never commit `.env`.
+
+After a confirmed Web import, Configuration Revisions under the managed
+configuration directory become the source of truth. Each immutable revision keeps
+non-secret YAML separate from a restricted secret file. Empty secret fields retain
+the current value; replacement and removal are explicit. Exports contain only
+non-secret settings and “must be provided” markers.
 
 For an end-to-end personal Gmail and Discord webhook walkthrough, follow the
 [Gmail and Discord setup guide](docs/setup-gmail-discord.md).
@@ -112,12 +131,24 @@ leave cloud classification disabled if historical mail must not leave the VPS.
 
 ## Docker
 
-Start Docker Desktop, create `config.yaml` and `.env`, then run:
+Start Docker Desktop, create the two legacy import templates, then run:
 
 ```powershell
-docker compose run --rm mailsentry bootstrap
-docker compose up -d
+docker compose up -d --build --wait mailsentry
+docker compose logs --tail 20 mailsentry
 ```
+
+The application is exposed only at `127.0.0.1:8080` by default. For managed HTTPS,
+set `MAILSENTRY_DOMAIN` and start the optional Caddy profile:
+
+```powershell
+docker compose --profile https up -d --build --wait
+```
+
+Use an existing reverse proxy or private tunnel instead if preferred. The
+application rejects remote plain HTTP unless the explicit isolated-network option
+is used. `mail-sentinel reset-admin` is the server-side recovery path for a lost
+password or TOTP device.
 
 For first server installation, consistent backup and restore, credential rotation,
 upgrades, rollback, log collection, and incident response, follow the
@@ -130,7 +161,8 @@ IMAP or notification-provider connection. Use `--accelerated` for a quick regres
 test; accelerated output is explicitly ineligible as 24-hour release evidence. The
 operations runbook contains the isolated VPS command and reconciliation steps.
 
-Persistent metadata is stored in the `mailsentry-data` volume. Message bodies,
+Persistent metadata is stored in the `mailsentry-data` volume and managed
+Configuration Revisions in `mailsentry-config`. Message bodies,
 transient cloud excerpts, and attachment content are not persisted. Privacy
 regression tests also enforce that transient content, mailbox passwords, and
 notification tokens stay out of SQLite, logs, and default notification text.
