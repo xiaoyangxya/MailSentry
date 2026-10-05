@@ -1,0 +1,38 @@
+{% set c = config.classification %}
+<p class="page-description">{{ w('These rules apply to all monitored mailboxes. Enter one item per line.',
+'这些规则应用于所有监控邮箱，每行填写一项。') }}</p>
+<form class="card" method="post" action="/settings/rules">{{ state() }}
+<h3>{{ w('Keywords and senders', '关键词与发件人') }}</h3>
+<div class="form-grid">
+{{ lines('important_keywords', w('Important subject keywords', '重要主题关键词'), c.important_keywords|join('
+'),
+w('Subject only, case-insensitive; any match adds 35 points once.', '仅匹配主题，不区分大小写；命中任意关键词加 35 分，不重复叠加。')) }}
+{{ lines('important_attachment_extensions', w('Important attachment extensions', '重要附件扩展名'), c.important_attachment_extensions|join('
+'),
+w('For example .pdf or .xlsx. Adds 15 points once.', '例如 .pdf、.xlsx，命中加 15 分。')) }}
+{{ lines('allow_senders', w('Priority senders (allowlist)', '优先发件人（白名单）'), c.allow_senders|join('
+'),
+w('Address or @domain. Always 100 points and immediate notification; overrides silence.', '完整邮箱或 @域名。直接 100 分并即时通知；优先于静默名单。')) }}
+{{ lines('deny_senders', w('Silent senders', '静默发件人'), c.deny_senders|join('
+'),
+w('Address or @domain. Records only, without notification.', '完整邮箱或 @域名。仅记录，不发送通知。')) }}
+</div><details><summary>{{ w('Scoring and sender adjustments', '评分阈值与发件人加减分') }}</summary>
+<div class="form-grid">
+{{ input('immediate_threshold', t.immediate_threshold, c.immediate_threshold, 'number', true) }}
+{{ input('digest_threshold', t.digest_threshold, c.digest_threshold, 'number', true) }}
+</div>
+{% set reputation = namespace(text='') %}{% for sender, score in c.sender_reputation %}
+{% set reputation.text = reputation.text ~ sender ~ ' = ' ~ score ~ '
+' %}{% endfor %}
+{{ lines('sender_reputation', w('Sender adjustments', '发件人加减分'), reputation.text,
+w('One address = score per line, from -30 to 30. Exact address overrides domain.', '每行：邮箱或 @域名 = 分数，范围 -30 到 30；精确邮箱优先于域名。')) }}
+</details>{{ save() }}</form>
+<section class="card"><h3>{{ w('Try saved rules', '试算已保存的规则') }}</h3>
+<p class="muted">{{ w('No model call, saved assessment or notification. Save edits before trying.',
+'不会调用模型、保存评估或发送通知。请先保存规则，再试算。') }}</p>
+<form method="post" action="/settings/rules/example">{{ state() }}<div class="form-grid">
+{{ input('sender', w('Example sender', '示例发件人'), 'person@example.com', required=true) }}
+{{ input('subject', w('Example subject', '示例主题'), 'invoice', required=true) }}</div>
+<button class="secondary">{{ w('Calculate score', '试算评分') }}</button></form>
+{% if example %}<div class="notice"><strong>{{ example.score }} / {{ t.get(example.level.value, example.level.value) }}</strong>
+<ul>{% for reason in example.reasons %}<li>{{ reason|assessment_reason(lang) }}</li>{% endfor %}</ul></div>{% endif %}</section>

@@ -199,10 +199,10 @@ def test_web_requires_login_csrf_and_escapes_untrusted_mail(tmp_path: Path) -> N
         assert language_response.status_code == 303
         localized_configuration = client.get("/configuration")
         assert '<html lang="zh">' in localized_configuration.text
-        assert "邮箱秘密变量名" in localized_configuration.text
-        assert "替换邮箱密码" in localized_configuration.text
-        assert "留空则保留当前值" in localized_configuration.text
-        assert "校验并保存草稿" in localized_configuration.text
+        assert "邮箱管理" in localized_configuration.text
+        assert "添加邮箱" in localized_configuration.text
+        assert "自定义 IMAP 服务器" in localized_configuration.text
+        assert "保存更改" in localized_configuration.text
         assert "Mailbox secret name" not in localized_configuration.text
         assert "Replace mailbox secret" not in localized_configuration.text
         assert "Validate and save draft" not in localized_configuration.text

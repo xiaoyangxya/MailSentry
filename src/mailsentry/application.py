@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
@@ -11,7 +12,7 @@ import yaml
 from mailsentry.auth import AuthManager
 from mailsentry.classifier import RuleClassifier
 from mailsentry.cloud_classifier import ResponsesCompatibleClassifier
-from mailsentry.config import AccountConfig
+from mailsentry.config import AccountConfig, ClassificationConfig
 from mailsentry.connectors import ImapConnector
 from mailsentry.managed_config import ConfigStore, ManagedConfigError, ManagedRevision
 from mailsentry.models import MailCandidate
@@ -81,6 +82,8 @@ class ControlPanel:
         config_text: str,
         secret_updates: dict[str, str | None],
         expected_revision: str | None,
+        *,
+        source_revision: str | None = None,
     ) -> ManagedRevision:
         try:
             document = yaml.safe_load(config_text) or {}
@@ -97,9 +100,193 @@ class ControlPanel:
             config_text,
             secret_updates=secret_updates,
             expected_revision=expected_revision,
+            source_revision=source_revision,
         )
         self._audit("configuration.stage", revision.id, "success", expected_revision)
         return revision
+
+    def editing_document(self, revision_id: str = "") -> tuple[dict, ManagedRevision | None]:
+        revision = self.config_store.get(revision_id) if revision_id else self.config_store.active()
+        if revision:
+            return yaml.safe_load(revision.config_path.read_text(encoding="utf-8")), revision
+        return {
+            "accounts": [],
+            "storage": {"path": self.state_database.as_posix(), "retention_days": 30},
+            "classification": {},
+            "notifications": {},
+            "timezone": "Asia/Shanghai",
+        }, None
+
+    def save_settings(
+        self,
+        section: str,
+        values: dict[str, str],
+        *,
+        source_revision: str,
+        expected_revision: str | None,
+    ) -> ManagedRevision:
+        """Apply one visible form to a complete draft, retaining other settings and secrets."""
+        document, source = self.editing_document(source_revision)
+        updates: dict[str, str | None] = {}
+        try:
+            if section == "accounts":
+                accounts = document.setdefault("accounts", [])
+                original = values.get("original_id", "")
+                account = next((item for item in accounts if item["id"] == original), None)
+                if original and account is None:
+                    raise ManagedConfigError("unknown account")
+                if values.get("action") == "delete":
+                    if account is None:
+                        raise ManagedConfigError("unknown account")
+                    accounts.remove(account)
+                    if not accounts:
+                        raise ManagedConfigError(
+                            "keep at least one mailbox; disable it to pause monitoring"
+                        )
+                else:
+                    account_id = original or values.get("account_id", "").strip()
+                    if not re.fullmatch(r"[\w.-]+", account_id) or (
+                        not original and any(item["id"] == account_id for item in accounts)
+                    ):
+                        raise ManagedConfigError("account id must be non-empty and unique")
+                    username = values.get("username", "").strip()
+                    password = values.get("password", "")
+                    host = (
+                        "imap.gmail.com"
+                        if values.get("preset") == "gmail"
+                        else values.get("host", "").strip()
+                    )
+                    if not username or (account is None and not password):
+                        raise ManagedConfigError("mailbox username and password are required")
+                    if not host:
+                        raise ManagedConfigError("IMAP host is required")
+                    if (
+                        account
+                        and self.storage.get_cursor(account_id) is not None
+                        and (
+                            account["username"] != username
+                            or account["host"] != host
+                            or account.get("folder", "INBOX") != (values.get("folder") or "INBOX")
+                        )
+                    ):
+                        raise ManagedConfigError(
+                            "add a new mailbox alias to change a monitored mailbox identity"
+                        )
+                    port = int(values.get("port", "993"))
+                    if not 1 <= port <= 65535:
+                        raise ManagedConfigError("IMAP port must be between 1 and 65535")
+                    if account is None:
+                        account = {
+                            "id": account_id,
+                            "password_env": (
+                                f"MAILSENTRY_ACCOUNT_{secrets.token_hex(4).upper()}_PASSWORD"
+                            ),
+                        }
+                        accounts.append(account)
+                    account.update(
+                        connector="imap",
+                        host=host,
+                        port=port,
+                        username=username,
+                        folder=values.get("folder", "INBOX").strip() or "INBOX",
+                        tls=True,
+                        enabled=values.get("enabled") == "true",
+                    )
+                    if password:
+                        updates[account["password_env"]] = password
+            elif section == "rules":
+                classification = document.setdefault("classification", {})
+                for key in (
+                    "important_keywords",
+                    "allow_senders",
+                    "deny_senders",
+                    "important_attachment_extensions",
+                ):
+                    classification[key] = list(
+                        dict.fromkeys(
+                            item.strip().lower()
+                            for item in values.get(key, "").splitlines()
+                            if item.strip()
+                        )
+                    )
+                for key in ("allow_senders", "deny_senders"):
+                    if any("@" not in item or item == "@" for item in classification[key]):
+                        raise ManagedConfigError("use an email address or @domain, one per line")
+                reputation = {}
+                for line in values.get("sender_reputation", "").splitlines():
+                    if line.strip():
+                        identity, adjustment = line.rsplit("=", 1)
+                        reputation[identity.strip()] = int(adjustment.strip())
+                classification["sender_reputation"] = reputation
+                for key in ("immediate_threshold", "digest_threshold"):
+                    classification[key] = int(values[key])
+            elif section == "ai":
+                cloud = document.setdefault("classification", {}).setdefault("cloud", {})
+                cloud.update(
+                    enabled=values.get("enabled") == "true",
+                    base_url=values.get("base_url", "").strip(),
+                    model=values.get("model", "").strip(),
+                    timeout_seconds=float(values.get("timeout_seconds", "15")),
+                )
+                key = cloud.setdefault("api_key_env", "MAILSENTRY_CLOUD_API_KEY")
+                if values.get("remove_secret") == "yes":
+                    updates[key] = None
+                elif values.get("secret"):
+                    updates[key] = values["secret"]
+            elif section == "notifications":
+                notifications = document.setdefault("notifications", {})
+                notifications["digest_times"] = [
+                    item.strip()
+                    for item in values.get("digest_times", "").split(",")
+                    if item.strip()
+                ]
+                document["timezone"] = values.get("timezone", "").strip()
+                key = notifications.setdefault("urls_env", "MAILSENTRY_APPRISE_URLS")
+                if values.get("remove_secret") == "yes":
+                    updates[key] = None
+                elif values.get("secret"):
+                    updates[key] = ",".join(
+                        discord_webhook_to_apprise(item.strip())
+                        for item in values["secret"].splitlines()
+                        if item.strip()
+                    )
+            elif section == "advanced":
+                return self.stage(
+                    values.get("config_text", ""),
+                    {},
+                    expected_revision,
+                    source_revision=source.id if source else None,
+                )
+            else:
+                raise ManagedConfigError("unknown settings page")
+        except (ValueError, KeyError) as exc:
+            if isinstance(exc, ManagedConfigError):
+                raise
+            raise ManagedConfigError(
+                "check numeric fields and sender adjustments (address = score)"
+            ) from exc
+        return self.stage(
+            yaml.safe_dump(document, allow_unicode=True, sort_keys=False),
+            updates,
+            expected_revision,
+            source_revision=source.id if source else None,
+        )
+
+    def rule_example(self, revision_id: str, sender: str, subject: str):
+        _, revision = self.editing_document(revision_id)
+        candidate = MailCandidate(
+            account_id="example",
+            uid=0,
+            uid_validity=0,
+            message_id=None,
+            sender=sender,
+            recipients=(),
+            subject=subject,
+            received_at=datetime.now(UTC),
+        )
+        return RuleClassifier(
+            revision.config.classification if revision else ClassificationConfig()
+        ).assess(candidate, self.storage.sender_feedback(sender))
 
     def stage_with_presets(
         self,
@@ -149,13 +336,9 @@ class ControlPanel:
             if digest_threshold:
                 classification["digest_threshold"] = int(digest_threshold)
             if retention_days:
-                document.setdefault("storage", {})["retention_days"] = int(
-                    retention_days
-                )
+                document.setdefault("storage", {})["retention_days"] = int(retention_days)
         except ValueError as exc:
-            raise ManagedConfigError(
-                "thresholds and retention days must be integers"
-            ) from exc
+            raise ManagedConfigError("thresholds and retention days must be integers") from exc
         if model_preset == "openai":
             cloud["base_url"] = "https://api.openai.com/v1"
         elif model_preset == "deepseek":
@@ -187,43 +370,29 @@ class ControlPanel:
         username: str,
         password: str,
         preset: str,
+        source_revision: str = "",
+        host: str = "",
+        port: int = 993,
+        folder: str = "INBOX",
     ) -> ManagedRevision:
         active = self.config_store.active()
-        if active is None:
-            raise ManagedConfigError("activate the initial configuration first")
-        document = yaml.safe_load(active.config_path.read_text(encoding="utf-8"))
-        accounts = document.setdefault("accounts", [])
-        normalized_id = account_id.strip()
-        if not normalized_id or any(str(item.get("id")) == normalized_id for item in accounts):
-            raise ManagedConfigError("account id must be non-empty and unique")
-        if not username.strip() or not password:
-            raise ManagedConfigError("mailbox username and password are required")
-        secret_name = f"MAILSENTRY_ACCOUNT_{secrets.token_hex(4).upper()}_PASSWORD"
-        host = "imap.gmail.com" if preset == "gmail" else ""
-        if not host:
-            raise ManagedConfigError("custom IMAP accounts must be added in advanced settings")
-        accounts.append(
+        return self.save_settings(
+            "accounts",
             {
-                "id": normalized_id,
-                "connector": "imap",
-                "enabled": True,
+                "account_id": account_id,
+                "username": username,
+                "password": password,
+                "preset": preset,
                 "host": host,
-                "port": 993,
-                "username": username.strip(),
-                "password_env": secret_name,
-                "folder": "INBOX",
-                "tls": True,
-            }
-        )
-        return self.stage(
-            yaml.safe_dump(document, allow_unicode=True, sort_keys=False),
-            {secret_name: password},
-            active.id,
+                "port": str(port),
+                "folder": folder,
+                "enabled": "true",
+            },
+            source_revision=source_revision,
+            expected_revision=active.id if active else None,
         )
 
-    def stage_account_enabled(
-        self, account_id: str, enabled: bool
-    ) -> ManagedRevision:
+    def stage_account_enabled(self, account_id: str, enabled: bool) -> ManagedRevision:
         active = self.config_store.active()
         if active is None:
             raise ManagedConfigError("no active configuration")
@@ -245,9 +414,7 @@ class ControlPanel:
         self.config_store.record_test(revision.id, f"account:{account.id}")
         self._audit("account.test", account.id, "success", revision.id)
 
-    def preview_account(
-        self, revision_id: str, account_id: str
-    ) -> list[dict[str, object]]:
+    def preview_account(self, revision_id: str, account_id: str) -> list[dict[str, object]]:
         revision = self._with_environment(revision_id)
         account = self._account(revision, account_id)
         include_text = revision.config.classification.cloud.enabled
@@ -255,9 +422,7 @@ class ControlPanel:
             date.today() - timedelta(days=1)
         )
         cloud = (
-            ResponsesCompatibleClassifier(revision.config.classification)
-            if include_text
-            else None
+            ResponsesCompatibleClassifier(revision.config.classification) if include_text else None
         )
         classifier = RuleClassifier(
             revision.config.classification,
@@ -317,6 +482,7 @@ class ControlPanel:
         self._audit("cloud.test", "provider", "success", revision.id)
 
     def activate(self, revision_id: str, expected_revision: str | None) -> ManagedRevision:
+        self.config_store.check_basis(revision_id, expected_revision)
         revision = self.config_store.get(revision_id)
         if revision.config.storage.path.resolve() != self.state_database:
             raise ManagedConfigError(
@@ -324,9 +490,7 @@ class ControlPanel:
             )
         tested = self.config_store.test_results(revision_id)
         required = {
-            f"account:{account.id}"
-            for account in revision.config.accounts
-            if account.enabled
+            f"account:{account.id}" for account in revision.config.accounts if account.enabled
         }
         if revision.config.notifications.urls():
             required.add("notifications")
@@ -341,18 +505,13 @@ class ControlPanel:
         missing = required - tested
         if missing:
             raise ManagedConfigError(
-                "enabled integrations require successful tests: "
-                + ", ".join(sorted(missing))
+                "enabled integrations require successful tests: " + ", ".join(sorted(missing))
             )
         for account in new_accounts:
             if self.storage.account_preview(revision.id, account.id) is None:
-                raise ManagedConfigError(
-                    f"24-hour preview for account {account.id!r} expired"
-                )
+                raise ManagedConfigError(f"24-hour preview for account {account.id!r} expired")
             MailSentryService(revision.config).bootstrap_account(account, days=1)
-        activated = self.config_store.activate(
-            revision_id, expected_revision=expected_revision
-        )
+        activated = self.config_store.activate(revision_id, expected_revision=expected_revision)
         try:
             if self.runtime.status().running:
                 self.runtime.reload(activated.config, activated.id)

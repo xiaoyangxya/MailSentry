@@ -1,0 +1,48 @@
+<p class="page-description">{{ w('Connect multiple mailboxes using read-only IMAP. Each mailbox is monitored independently.',
+'通过只读 IMAP 接入多个邮箱，每个邮箱独立监控，不会更改邮件状态。') }}</p>
+{% if legacy_available %}<details class="card"><summary>{{ w('Import existing server configuration', '导入服务器上的已有配置') }}</summary>
+<p>{{ t.legacy_import_help }}</p><form method="post" action="/configuration/import">{{ state() }}
+<button>{{ t.import_legacy }}</button></form></details>{% endif %}
+{% for a in accounts %}<article class="card mailbox-card">
+<div class="card-heading"><div><h3>{{ a.id }}</h3><p>{{ a.username }}</p></div>
+<span class="status">{% if is_draft %}
+{{ w('Enable on apply', '应用后启用') if a.enabled else w('Disable on apply', '应用后停用') }}
+{% else %}{{ t.enabled if a.enabled else t.disabled }}{% endif %}</span></div>
+<p class="muted">{{ a.host }}:{{ a.port }} · {{ a.folder }} · TLS</p>
+<details {% if values.get('original_id') == a.id %}open{% endif %}>
+<summary>{{ w('Edit mailbox', '编辑邮箱') }}</summary>
+<form method="post" action="/settings/accounts">{{ state() }}
+<input type="hidden" name="original_id" value="{{ a.id }}">
+<input type="hidden" name="preset" value="custom">
+<div class="form-grid">
+<label class="field">{{ w('Mailbox address / login', '邮箱地址 / 登录名') }}
+<input name="username" value="{{ values.get('username', a.username) if values.get('original_id') == a.id else a.username }}" required></label>
+<label class="field">{{ w('Replace password', '替换邮箱密码') }}<input type="password" name="password" autocomplete="new-password"><small>{{ t.empty_keeps_current }}</small></label>
+<label class="field">{{ w('IMAP host', 'IMAP 服务器') }}<input name="host" value="{{ values.get('host', a.host) if values.get('original_id') == a.id else a.host }}" required></label>
+<label class="field">{{ w('Port', '端口') }}<input name="port" type="number" min="1" max="65535" value="{{ values.get('port', a.port) if values.get('original_id') == a.id else a.port }}" required></label>
+<label class="field">{{ w('Folder', '监控文件夹') }}<input name="folder" value="{{ values.get('folder', a.folder) if values.get('original_id') == a.id else a.folder }}" required></label>
+<label class="field">{{ w('Monitoring', '监控状态') }}<select name="enabled">
+<option value="true" {% if a.enabled %}selected{% endif %}>{{ t.enabled }}</option>
+<option value="false" {% if not a.enabled %}selected{% endif %}>{{ t.disabled }}</option></select></label>
+</div>{{ save() }}</form></details>
+<details class="remove-mailbox"><summary>{{ w('Remove mailbox…', '移除邮箱…') }}</summary>
+<p>{{ w('Stops monitoring after applying. Source mail and saved assessment history are retained.',
+'应用后停止监控，原邮箱邮件和已保存的评估记录会保留。') }}</p>
+<form method="post" action="/settings/accounts">{{ state() }}
+<input type="hidden" name="original_id" value="{{ a.id }}"><button class="danger"
+name="action" value="delete">{{ w('Remove from draft', '从草稿移除') }}</button></form></details>
+</article>{% else %}<div class="notice">{{ w('No mailboxes yet. Add one below to get started.', '还没有监控邮箱，在下方添加即可开始。') }}</div>{% endfor %}
+<section class="card" id="add-mailbox"><h3>{{ w('Add mailbox', '添加邮箱') }}</h3>
+<form method="post" action="/settings/accounts">{{ state() }}
+<div class="form-grid">
+{{ input('account_id', w('Mailbox alias (unique)', '邮箱别名（不可重复）'), required=true, help=w('For example: personal, work, family.', '例如：个人、工作、家庭。')) }}
+{{ input('username', w('Mailbox address / login', '邮箱地址 / 登录名'), required=true) }}
+<label class="field">{{ w('Mailbox provider', '邮箱服务') }}<select name="preset">
+<option value="gmail" {% if values.get('preset') != 'custom' %}selected{% endif %}>Gmail IMAP</option>
+<option value="custom" {% if values.get('preset') == 'custom' %}selected{% endif %}>{{ t.custom_imap }}</option></select>
+<small>{{ w('Gmail uses imap.gmail.com. Other providers use the host below.', 'Gmail 自动使用 imap.gmail.com，其他邮箱请填写下方服务器。') }}</small></label>
+{{ input('password', w('App password / IMAP password', '应用专用密码 / IMAP 授权码'), type='password', required=true) }}
+{{ input('host', w('Custom IMAP host', '自定义 IMAP 服务器'), help=w('Required for custom IMAP.', '选择自定义 IMAP 时必填。')) }}
+{{ input('port', w('TLS port', 'TLS 端口'), 993, 'number', true) }}
+{{ input('folder', w('Folder', '监控文件夹'), 'INBOX', required=true) }}
+</div><input type="hidden" name="enabled" value="true">{{ save() }}</form></section>

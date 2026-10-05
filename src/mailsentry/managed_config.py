@@ -81,6 +81,7 @@ class ConfigStore:
         *,
         secret_updates: dict[str, str | None] | None = None,
         expected_revision: str | None = None,
+        source_revision: str | None = None,
     ) -> ManagedRevision:
         if len(config_text.encode("utf-8")) > 256 * 1024:
             raise ManagedConfigError("configuration exceeds 256 KiB")
@@ -91,6 +92,13 @@ class ConfigStore:
                 raise RevisionConflict(
                     f"configuration changed from {expected_revision!r} to {current_id!r}"
                 )
+            source = self.get(source_revision) if source_revision else active
+            if source and source.id != current_id:
+                metadata = json.loads(
+                    (source.config_path.parent / "revision.json").read_text(encoding="utf-8")
+                )
+                if metadata.get("based_on") != current_id:
+                    raise RevisionConflict("draft is based on an older active configuration")
             revision_id = f"{datetime.now(UTC):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:8]}"
             directory = self.revisions / revision_id
             directory.mkdir(parents=False)
@@ -99,7 +107,7 @@ class ConfigStore:
             secrets_path = directory / "secrets.env"
             try:
                 config_path.write_text(config_text, encoding="utf-8")
-                existing = self._read_secrets(active.secrets_path) if active else {}
+                existing = self._read_secrets(source.secrets_path) if source else {}
                 for key, value in (secret_updates or {}).items():
                     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
                         raise ManagedConfigError(f"invalid secret name {key!r}")
@@ -107,13 +115,11 @@ class ConfigStore:
                         existing.pop(key, None)
                     elif value:
                         if len(value.encode("utf-8")) > 16 * 1024:
-                            raise ManagedConfigError(
-                                f"secret {key!r} exceeds 16 KiB"
-                            )
+                            raise ManagedConfigError(f"secret {key!r} exceeds 16 KiB")
                         existing[key] = value
                 self._write_secrets(secrets_path, existing)
                 revision = self.get(revision_id)
-                self._write_metadata(directory, "draft")
+                self._write_metadata(directory, "draft", based_on=current_id)
                 return revision
             except Exception:
                 shutil.rmtree(directory, ignore_errors=True)
@@ -126,6 +132,7 @@ class ConfigStore:
         expected_revision: str | None,
     ) -> ManagedRevision:
         with self._lock:
+            self.check_basis(revision_id, expected_revision)
             active = self.active()
             current_id = active.id if active else None
             if expected_revision != current_id:
@@ -152,6 +159,18 @@ class ConfigStore:
             self._write_metadata(revision.config_path.parent, "active")
             self._prune({revision.id, current_id} - {None})
             return revision
+
+    def check_basis(self, revision_id: str, expected_revision: str | None) -> None:
+        active = self.active()
+        current = active.id if active else None
+        if current != expected_revision:
+            raise RevisionConflict("active configuration changed; reopen settings")
+        revision = self.get(revision_id)
+        metadata = json.loads(
+            (revision.config_path.parent / "revision.json").read_text(encoding="utf-8")
+        )
+        if revision_id != current and metadata.get("based_on") != current:
+            raise RevisionConflict("draft is based on an older active configuration")
 
     def restore(self, revision_id: str | None) -> None:
         """Restore the active pointer after a runtime activation failure."""
@@ -249,9 +268,7 @@ class ConfigStore:
         self._managed_keys = set(values)
 
     @staticmethod
-    def _validate_required_secrets(
-        config: ServiceConfig, secrets: dict[str, str]
-    ) -> None:
+    def _validate_required_secrets(config: ServiceConfig, secrets: dict[str, str]) -> None:
         missing = []
         for account in config.accounts:
             if not account.enabled:
@@ -275,9 +292,7 @@ class ConfigStore:
         if not path.exists():
             return {}
         return {
-            str(key): str(value)
-            for key, value in dotenv_values(path).items()
-            if value is not None
+            str(key): str(value) for key, value in dotenv_values(path).items() if value is not None
         }
 
     @staticmethod
@@ -291,12 +306,13 @@ class ConfigStore:
             path.chmod(0o600)
 
     @staticmethod
-    def _write_metadata(directory: Path, status: str) -> None:
+    def _write_metadata(directory: Path, status: str, *, based_on: str | None = None) -> None:
         (directory / "revision.json").write_text(
             json.dumps(
                 {
                     "schema_version": 1,
                     "status": status,
+                    "based_on": based_on,
                     "updated_at": datetime.now(UTC).isoformat(),
                 },
                 indent=2,
@@ -306,9 +322,7 @@ class ConfigStore:
 
     def _prune(self, keep: set[str]) -> None:
         candidates = (
-            path
-            for path in self.revisions.iterdir()
-            if path.is_dir() and path.name not in keep
+            path for path in self.revisions.iterdir() if path.is_dir() and path.name not in keep
         )
         for path in candidates:
             shutil.rmtree(path)

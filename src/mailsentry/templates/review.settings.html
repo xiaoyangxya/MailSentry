@@ -1,0 +1,27 @@
+<p class="page-description">{{ w('Finish editing first. Each save creates a new draft and resets tests. Test the final draft, then apply.',
+'请先完成所有编辑。每次保存会生成新草稿并重置测试，最后统一测试并应用。') }}</p>
+{% if not is_draft %}<div class="notice">{{ w('This configuration is already active.', '此配置已生效。') }}</div>{% else %}
+<section class="card"><h3>1. {{ w('Test mailboxes', '测试邮箱') }}</h3>
+{% for a in accounts %}<div class="test-row"><div><strong>{{ a.id }}</strong><small>{{ a.username }}</small></div>
+{% if a.enabled %}<div>
+<form class="inline" method="post" action="/configuration/{{ selected_revision }}/test/account/{{ a.id }}">{{ state() }}
+<button class="secondary">{{ '✓ ' if 'account:' ~ a.id in tests else '' }}{{ w('Test connection', '测试连接') }}</button></form>
+<form class="inline" method="post" action="/configuration/{{ selected_revision }}/preview/account/{{ a.id }}">{{ state() }}
+<button class="secondary">{{ '✓ ' if 'preview:' ~ a.id in tests else '' }}{{ t.preview_24h }}</button></form></div>
+{% else %}<span class="muted">{{ t.disabled }}</span>{% endif %}</div>{% endfor %}</section>
+<section class="card"><h3>2. {{ w('Test delivery and AI', '测试通知和 AI') }}</h3>
+{% if config.notifications.urls() %}<form method="post" action="/configuration/{{ selected_revision }}/test/notifications">{{ state() }}
+<label class="check"><input type="checkbox" name="confirm_send" value="yes" required>{{ w('Send a real test notification', '发送一条真实测试通知') }}</label>
+<button class="secondary">{{ '✓ ' if 'notifications' in tests else '' }}{{ t.send_notification_test }}</button></form>
+{% else %}<p class="muted">{{ w('No notification channels configured.', '尚未配置通知渠道。') }}</p>{% endif %}
+{% if config.classification.cloud.enabled %}<form method="post" action="/configuration/{{ selected_revision }}/test/cloud">{{ state() }}
+<label class="check"><input type="checkbox" name="confirm_cost" value="yes" required>{{ w('Synthetic API request; provider charges may apply', '使用虚构内容测试，供应商可能收费') }}</label>
+<button class="secondary">{{ '✓ ' if 'cloud' in tests else '' }}{{ t.run_provider_test }}</button></form>
+{% else %}<p class="muted">{{ w('AI assessment is disabled.', 'AI 评估已停用。') }}</p>{% endif %}</section>
+<section class="card"><h3>3. {{ w('Apply changes', '应用更改') }}</h3>
+<p>{{ w('Required checks remaining', '尚需完成的检查') }}：{{ remaining }}</p>
+<form method="post" action="/configuration/{{ selected_revision }}/activate">{{ state() }}
+<button {% if not ready %}disabled{% endif %}>{{ w('Apply and start monitoring', '应用并开始监控') }}</button></form>
+<p class="muted">{{ w('Recent-mail preview sends no alerts. New mail after activation can trigger notifications.',
+'历史预览不发送通知，启用后仅针对新邮件通知。') }}</p></section>
+{% endif %}

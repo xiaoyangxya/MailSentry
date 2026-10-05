@@ -1,0 +1,12 @@
+<p class="page-description">{{ w('Choose where alerts arrive and when digests are sent.', '设置通知接收位置和摘要发送时间。') }}</p>
+<form class="card" method="post" action="/settings/notifications">{{ state() }}
+<h3>{{ w('Delivery channels', '通知渠道') }}</h3>
+<label class="field">{{ w('Replace Discord webhook / Apprise URLs', '替换 Discord Webhook / Apprise 地址') }}
+<textarea class="list-input" name="secret" rows="3" autocomplete="off"></textarea>
+<small>{{ w('One URL per line. Blank keeps saved channels. Secrets are never shown.', '每行一个地址。留空保留已保存渠道；已有秘密不会回显。') }}</small></label>
+<p class="muted">{{ w('Configured channels', '已配置渠道数') }}：{{ config.notifications.urls()|length }}</p>
+<label class="check"><input type="checkbox" name="remove_secret" value="yes">{{ w('Remove all channels', '移除所有通知渠道') }}</label>
+<div class="form-grid">
+{{ input('digest_times', t.digest_times, digest_times, required=true,
+help=w('HH:MM, separated by commas. For example 09:00,18:00.', '使用 HH:MM 格式，逗号分隔，例如 09:00,18:00。')) }}
+{{ input('timezone', w('Timezone', '时区'), timezone, required=true) }}</div>{{ save() }}</form>

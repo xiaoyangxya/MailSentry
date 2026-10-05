@@ -7,19 +7,25 @@ from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
-from jinja2 import DictLoader, Environment, select_autoescape
+from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, select_autoescape
 
 from mailsentry.application import ControlPanel
 from mailsentry.auth import AdminSession
 from mailsentry.managed_config import ManagedConfigError
+from mailsentry.settings_ui import settings_context
 
 SESSION_COOKIE = "mailsentry_session"
 PREAUTH_CSRF_COOKIE = "mailsentry_form_csrf"
 MODULES = (
     ("dashboard", "/", "Dashboard", "\u603b\u89c8"),
-    ("configuration", "/configuration", "Configuration", "\u914d\u7f6e"),
+    ("accounts", "/accounts", "Mailboxes", "邮箱管理"),
+    ("rules", "/rules", "Detection rules", "检测规则"),
+    ("ai", "/ai", "AI assessment", "AI 评估"),
+    ("notifications", "/notifications", "Notifications", "通知设置"),
+    ("review", "/configuration/review", "Test and apply", "测试并应用"),
     ("events", "/events", "Assessments", "\u8bc4\u4f30"),
     ("security", "/security", "Security", "\u5b89\u5168"),
+    ("advanced", "/advanced", "Advanced", "高级设置"),
 )
 
 
@@ -61,7 +67,9 @@ def create_app(
     allow_insecure_http: bool = False,
 ) -> FastAPI:
     templates = Environment(
-        loader=DictLoader(TEMPLATES),
+        loader=ChoiceLoader([
+            FileSystemLoader(Path(__file__).with_name("templates")), DictLoader(TEMPLATES),
+        ]),
         autoescape=select_autoescape(default=True),
     )
     templates.filters["assessment_reason"] = localize_assessment_reason
@@ -360,42 +368,75 @@ def register_management_routes(
     localized_message,
 ) -> None:
     @app.get("/configuration", response_class=HTMLResponse)
+    @app.get("/accounts", response_class=HTMLResponse)
+    @app.get("/rules", response_class=HTMLResponse)
+    @app.get("/ai", response_class=HTMLResponse)
+    @app.get("/notifications", response_class=HTMLResponse)
+    @app.get("/advanced", response_class=HTMLResponse)
+    @app.get("/configuration/review", response_class=HTMLResponse)
     def configuration(request: Request, draft: str = ""):
         session = require_session(request)
         if isinstance(session, RedirectResponse):
             return session
-        active = panel.config_store.active()
-        selected = panel.config_store.get(draft) if draft else active
-        config_text = (
-            selected.config_path.read_text(encoding="utf-8")
-            if selected
-            else DEFAULT_CONFIG
-        )
-        tests = panel.config_store.test_results(selected.id) if selected else frozenset()
-        return render(
-            "configuration.html",
-            request,
-            session=session,
-            active_revision=active.id if active else "",
-            selected_revision=selected.id if selected else "",
-            is_draft=bool(selected and (not active or selected.id != active.id)),
-            config_text=config_text,
-            tests=tests,
-            accounts=selected.config.accounts if selected else (),
-            primary_account=selected.config.accounts[0] if selected else None,
-            classification=selected.config.classification if selected else None,
-            notifications=selected.config.notifications if selected else None,
-            digest_times=",".join(
-                value.strftime("%H:%M")
-                for value in selected.config.notifications.digest_times
-            )
-            if selected
-            else "09:00,18:00",
-            storage=selected.config.storage if selected else None,
-            cloud_enabled=bool(selected and selected.config.classification.cloud.enabled),
+        section = request.url.path.rsplit("/", 1)[-1]
+        if section == "configuration":
+            section = "accounts"
+        if not draft:
+            draft = request.cookies.get("mailsentry_draft", "")
+            if draft:
+                try:
+                    panel.config_store.get(draft)
+                except ManagedConfigError:
+                    draft = ""
+        context = settings_context(panel, section, draft)
+        response = render(
+            "configuration.html", request, session=session, **context,
             legacy_available=bool(
-                active is None and legacy_config is not None and legacy_config.exists()
+                not context["active_revision"] and legacy_config and legacy_config.exists()
             ),
+        )
+        if draft:
+            response.set_cookie("mailsentry_draft", draft, httponly=True, samesite="lax")
+        return response
+
+    @app.post("/settings/{section}")
+    async def save_settings(request: Request, section: str):
+        session = require_session(request)
+        if isinstance(session, RedirectResponse):
+            return session
+        values = {key: str(value) for key, value in (await request.form()).items()}
+        require_csrf(session, values.get("csrf_token", ""))
+        if section not in {"accounts", "rules", "ai", "notifications", "advanced"}:
+            return PlainTextResponse("Unknown settings page", 404)
+        source = values.get("source_revision", "")
+        try:
+            revision = panel.save_settings(
+                section, values, source_revision=source,
+                expected_revision=values.get("expected_revision") or None,
+            )
+        except ManagedConfigError as exc:
+            safe_values = {k: v for k, v in values.items() if k not in {"password", "secret"}}
+            return render(
+                "configuration.html", request, session=session, status=400,
+                **settings_context(panel, section, source, values=safe_values,
+                                   error=localized_message(request, str(exc))),
+            )
+        response = RedirectResponse(f"/{section}?draft={revision.id}", 303)
+        response.set_cookie("mailsentry_draft", revision.id, httponly=True, samesite="lax")
+        return response
+
+    @app.post("/settings/rules/example")
+    async def rule_example(request: Request):
+        session = require_session(request)
+        if isinstance(session, RedirectResponse):
+            return session
+        values = {key: str(value) for key, value in (await request.form()).items()}
+        require_csrf(session, values.get("csrf_token", ""))
+        source = values.get("source_revision", "")
+        example = panel.rule_example(source, values.get("sender", ""), values.get("subject", ""))
+        return render(
+            "configuration.html", request, session=session,
+            **settings_context(panel, "rules", source, values=values, example=example),
         )
 
     @app.post("/configuration/stage")
@@ -549,7 +590,7 @@ def register_management_routes(
                 ),
                 status=400,
             )
-        return RedirectResponse(f"/configuration?draft={revision_id}", 303)
+        return RedirectResponse(f"/configuration/review?draft={revision_id}", 303)
 
     @app.post("/configuration/{revision_id}/test/notifications")
     def test_notifications(
@@ -583,7 +624,7 @@ def register_management_routes(
                 ),
                 status=400,
             )
-        return RedirectResponse(f"/configuration?draft={revision_id}", 303)
+        return RedirectResponse(f"/configuration/review?draft={revision_id}", 303)
 
     @app.post("/configuration/{revision_id}/preview/account/{account_id}")
     def preview_account(
@@ -651,7 +692,7 @@ def register_management_routes(
                 ),
                 status=400,
             )
-        return RedirectResponse(f"/configuration?draft={revision_id}", 303)
+        return RedirectResponse(f"/configuration/review?draft={revision_id}", 303)
 
     @app.post("/configuration/{revision_id}/activate")
     def activate(
@@ -1093,12 +1134,40 @@ BASE = """
  integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
  crossorigin="anonymous" defer></script>
 <style>
-:root{font-family:Inter,system-ui,sans-serif;color:#14211b;background:#f2f6f3}
+:root{font-family:Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+color:#243b33;background:#f5f7f6;font-size:15px;line-height:1.6}
 *{box-sizing:border-box}body{margin:0}
 .shell{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
 aside{background:#10291f;color:#fff;padding:24px}
 aside a{display:block;color:#dff5e9;padding:10px;border-radius:8px;text-decoration:none}
-main{padding:32px;max-width:1180px;width:100%}
+main{padding:28px 42px 64px;max-width:1280px;width:100%;min-width:0}
+aside{position:sticky;top:0;height:100vh}aside a{margin:4px 0}
+aside a[aria-current="page"]{background:#254f3d;color:white;font-weight:700}
+h1{font-size:18px;margin:0}h2{font-size:28px;margin:0}h3{font-size:18px;margin:0 0 12px}
+p{margin:8px 0 16px}small{display:block;color:#61766c;font-size:13px;font-weight:400}
+.top{border-bottom:1px solid #dce6df;padding-bottom:16px;margin-bottom:28px}
+.page-heading,.card-heading,.test-row,.draft-bar{display:flex;align-items:center;
+justify-content:space-between;gap:20px}.page-heading{margin-bottom:14px}
+.eyebrow{font-size:11px;letter-spacing:.12em;color:#667e71;margin:0 0 4px}
+.page-description{color:#61766c;margin-bottom:24px;max-width:760px}
+.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 24px}
+.field{margin:0 0 16px}.field input,.field select,.field textarea{margin-top:6px}
+.field small{margin-top:6px}.field:has(select){max-width:100%}
+.form-footer{border-top:1px solid #e2e9e5;padding-top:16px;margin-top:20px;
+display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.draft-bar{background:#e8f3ed;border:1px solid #b8d6c5;border-radius:12px;
+padding:16px 20px;margin:0 0 24px}.notice{padding:16px;border-radius:10px;
+background:#edf3f0;margin:16px 0}.notice.error{background:#fff0ef}
+.check{display:flex;align-items:center;gap:10px;font-weight:400;margin:16px 0}
+input[type=checkbox]{width:auto;padding:0;accent-color:#16794b}
+textarea.list-input{min-height:110px;font-family:inherit;resize:vertical}
+input,select,textarea,button{font:inherit}input:focus,textarea:focus,select:focus{
+outline:2px solid #16794b;outline-offset:2px}button:disabled{opacity:.5;cursor:not-allowed}
+button.secondary,.button.secondary{background:#edf3f0;color:#185e3e}
+details{margin:12px 0}summary{cursor:pointer;color:#246345;font-weight:600;padding:8px 0}
+.remove-mailbox summary{font-size:13px;color:#7a615e}.test-row{padding:14px 0;
+border-bottom:1px solid #e2e9e5}.test-row:last-child{border:0}
+.empty{text-align:center;padding:40px}.card-heading p{margin:0}
 .card{background:#fff;border:1px solid #dce6df;border-radius:14px;padding:20px;
 margin-bottom:18px;box-shadow:0 8px 24px #1635260c}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px}
@@ -1115,12 +1184,19 @@ th,td{text-align:left;padding:10px;border-bottom:1px solid #e2e9e5;vertical-alig
 .top{display:flex;justify-content:space-between;align-items:center}
 .inline{display:inline}.error{color:#a21d24}.secret{letter-spacing:.08em}
 @media(max-width:760px){.shell{display:block}aside{padding:12px;display:flex;gap:4px;
-overflow:auto}aside h2{display:none}aside a{white-space:nowrap}main{padding:16px}
+overflow:auto;position:static;height:auto}aside h2{display:none}
+aside a{white-space:nowrap}main{padding:16px}
+.form-grid{grid-template-columns:1fr}.draft-bar,.test-row{align-items:stretch;flex-direction:column}
+.page-heading{align-items:flex-start}h2{font-size:23px}
 table{display:block;overflow:auto}}
 </style></head><body hx-boost="true"><div class="shell">
 {% if session %}<aside><h2>{{ t.product }}</h2>
 {% for key,url,en,zh in modules %}
-<a href="{{ url }}">{{ zh if lang == 'zh' else en }}</a>
+{% set settings_link = key in ['accounts','rules','ai','notifications','review','advanced'] %}
+{% set suffix = '?draft=' ~ selected_revision if selected_revision and settings_link else '' %}
+<a href="{{ url }}{{ suffix }}"
+{% if section == key or request.url.path == url %}aria-current="page"{% endif %}>
+{{ zh if lang == 'zh' else en }}</a>
 {% endfor %}
 </aside>{% endif %}
 <main><div class="top"><h1>{{ t.product }}</h1><div>
@@ -1180,112 +1256,12 @@ TEMPLATES = {
 or (t.enabled if a.enabled else t.disabled) }}</span>
 {% if a.runtime.error %}<br><span class="error">{{ a.runtime.error }}</span>{% endif %}</td>
 <td>{{ a.last_scan or t.not_bootstrapped }}</td><td>
-<form method="post" action="/accounts/{{ a.id }}/enabled">
-<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-<button name="enabled" value="{{ 'false' if a.enabled else 'true' }}">
-{{ t.disable if a.enabled else t.enable }}</button></form></td></tr>
+<a class="button secondary" href="/accounts">
+{{ '管理邮箱' if lang == 'zh' else 'Manage mailbox' }}</a></td></tr>
 {% endfor %}</table></div>
 <form method="post" action="/notifications/retry">
 <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
 <button>{{ t.retry_failed_notifications }}</button></form>{% endblock %}
-""",
-    "configuration.html": """
-{% extends "base.html" %}{% block content %}<h2>{{ t.configuration }}</h2>
-{% if legacy_available %}<div class="card"><h3>{{ t.legacy_detected }}</h3>
-<p>{{ t.legacy_import_help }}</p>
-<form method="post" action="/configuration/import">
-<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-<button>{{ t.import_legacy }}</button></form></div>{% endif %}
-<form class="card" method="post" action="/configuration/stage">
-<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-<input type="hidden" name="expected_revision" value="{{ active_revision }}">
-<h3>{{ t.common_settings }}</h3>
-<div class="grid"><div><label>{{ t.account_alias }}</label>
-<input name="account_id" value="{{ primary_account.id if primary_account else 'personal' }}">
-<label>{{ t.mailbox_address }}</label>
-<input type="email" name="account_username"
-value="{{ primary_account.username if primary_account else '' }}"></div>
-<div><label>{{ t.immediate_threshold }}</label>
-<input type="number" min="1" max="100" name="immediate_threshold"
-value="{{ classification.immediate_threshold if classification else 80 }}">
-<label>{{ t.digest_threshold }}</label><input type="number" min="0" max="99"
-name="digest_threshold" value="{{ classification.digest_threshold if classification else 50 }}">
-</div><div><label>{{ t.digest_times }}</label>
-<input name="digest_times" value="{{ digest_times }}">
-<label>{{ t.retention_days }}</label><input type="number" min="1" name="retention_days"
-value="{{ storage.retention_days if storage else 30 }}"></div></div>
-<div class="grid"><div><label>{{ t.mailbox_preset }}</label>
-<select name="mail_preset"><option value="custom">{{ t.custom_imap }}</option>
-<option value="gmail">Gmail IMAP</option></select></div>
-<div><label>{{ t.model_provider }}</label>
-<select name="model_preset"><option value="custom">{{ t.custom_responses }}</option>
-<option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option>
-</select><label>{{ t.cloud_assessment }}</label>
-<select name="cloud_enabled">
-<option value="false"{% if not cloud_enabled %} selected{% endif %}>{{ t.disabled }}</option>
-<option value="true"{% if cloud_enabled %} selected{% endif %}>{{ t.enabled }}</option></select>
-<label>{{ t.model }}</label><input name="cloud_model"
-value="{{ classification.cloud.model if classification else '' }}"></div></div>
-<details><summary>{{ t.advanced_yaml }}</summary>
-<textarea name="config_text" spellcheck="false">{{ config_text }}</textarea>
-</details>
-<div class="grid"><div><label>{{ t.mailbox_secret_name }}</label>
-<input name="mailbox_secret_name" placeholder="MAILSENTRY_ACCOUNT_PERSONAL_PASSWORD">
-<label>{{ t.replace_mailbox_secret }}</label><input class="secret" type="password"
-name="mailbox_secret" placeholder="{{ t.empty_keeps_current }}">
-<label><input type="checkbox" name="mailbox_secret_remove" value="yes">
-{{ t.remove_mailbox_secret }}</label></div>
-<div><label>{{ t.notification_secret_name }}</label>
-<input name="notification_secret_name" placeholder="MAILSENTRY_APPRISE_URLS">
-<label>{{ t.discord_apprise_url }}</label>
-<input class="secret" type="password" name="notification_secret">
-<label><input type="checkbox" name="notification_secret_remove" value="yes">
-{{ t.remove_notification_secret }}</label></div>
-<div><label>{{ t.cloud_secret_name }}</label>
-<input name="cloud_secret_name" placeholder="MAILSENTRY_CLOUD_API_KEY">
-<label>{{ t.replace_provider_key }}</label>
-<input class="secret" type="password" name="cloud_secret">
-<label><input type="checkbox" name="cloud_secret_remove" value="yes">
-{{ t.remove_provider_secret }}</label></div></div>
-<button>{{ t.validate_save_draft }}</button></form>
-{% if active_revision %}<form class="card" method="post" action="/configuration/accounts/add">
-<h3>{{ t.add_gmail_account }}</h3>
-<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-<input type="hidden" name="preset" value="gmail">
-<div class="grid"><div><label>{{ t.account_alias }}</label><input name="account_id" required></div>
-<div><label>{{ t.gmail_address }}</label><input type="email" name="username" required></div>
-<div><label>{{ t.application_password }}</label>
-<input type="password" name="password" required></div>
-</div><button>{{ t.add_as_draft }}</button></form>{% endif %}
-{% if is_draft %}<div class="card"><h3>{{ t.draft }} {{ selected_revision }}</h3>
-<p>{{ t.integrations_must_pass }}</p>
-{% for a in accounts %}{% if a.enabled %}
-<form class="inline" method="post"
-action="/configuration/{{ selected_revision }}/test/account/{{ a.id }}">
-<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-<button>{{ t.test }} {{ a.id }}{% if 'account:' ~ a.id in tests %} \u2713{% endif %}</button>
-</form><form class="inline" method="post"
-action="/configuration/{{ selected_revision }}/preview/account/{{ a.id }}">
-<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-<button>{{ t.preview_24h }}{% if 'preview:' ~ a.id in tests %} \u2713{% endif %}</button>
-</form>{% endif %}{% endfor %}
-<form class="inline" method="post"
-action="/configuration/{{ selected_revision }}/test/notifications">
-<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-<input type="hidden" name="confirm_send" value="yes">
-<button>{{ t.send_notification_test }}{% if 'notifications' in tests %} \u2713{% endif %}</button>
-</form>{% if cloud_enabled %}<form class="inline" method="post"
-action="/configuration/{{ selected_revision }}/test/cloud">
-<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-<input type="hidden" name="confirm_cost" value="yes">
-<button>{{ t.run_provider_test }}{% if 'cloud' in tests %} \u2713{% endif %}</button>
-</form>{% endif %}<form method="post"
-action="/configuration/{{ selected_revision }}/activate">
-<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-<input type="hidden" name="expected_revision" value="{{ active_revision }}">
-<button>{{ t.activate_revision }}</button></form></div>
-{% elif active_revision %}<a class="button" href="/configuration/export">
-{{ t.export_redacted }}</a>{% endif %}{% endblock %}
 """,
     "events.html": """
 {% extends "base.html" %}{% block content %}<h2>{{ t.events }}</h2>
@@ -1349,7 +1325,8 @@ action="/configuration/{{ selected_revision }}/activate">
 {% for reason in item.reasons %}{{ reason|assessment_reason(lang) }}
 {% if not loop.last %}<br>{% endif %}{% endfor %}</td>
 </tr>{% endfor %}</table>
-<a class="button" href="/configuration?draft={{ revision_id }}">{{ t.back_to_draft }}</a>
+<a class="button" href="/configuration/review?draft={{ revision_id }}">
+{{ t.back_to_draft }}</a>
 </div>{% endblock %}
 """,
 }

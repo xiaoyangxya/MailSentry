@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% macro w(en, zh) %}{{ zh if lang == 'zh' else en }}{% endmacro %}
+{% macro state() %}
+<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+<input type="hidden" name="source_revision" value="{{ selected_revision }}">
+<input type="hidden" name="expected_revision" value="{{ active_revision }}">
+{% endmacro %}
+{% macro input(name, label, value='', type='text', required=false, help='') %}
+<label class="field">{{ label }}
+<input name="{{ name }}" type="{{ type }}"
+value="{{ '' if type == 'password' else values.get(name, value) }}"
+{% if required %}required{% endif %}{% if type == 'password' %} autocomplete="new-password"{% endif %}>
+{% if help %}<small>{{ help }}</small>{% endif %}</label>
+{% endmacro %}
+{% macro lines(name, label, value, help='') %}
+<label class="field">{{ label }}<textarea class="list-input" name="{{ name }}"
+rows="5">{{ values.get(name, value) }}</textarea><small>{{ help }}</small></label>
+{% endmacro %}
+{% macro save() %}<div class="form-footer"><button>{{ w('Save changes', '保存更改') }}</button>
+<span class="muted">{{ w('Saved to draft. Monitoring changes only after applying.',
+'先保存到草稿，应用更改后才影响监控。') }}</span></div>{% endmacro %}
+{% block content %}
+{% set titles = {'accounts': w('Mailboxes', '邮箱管理'), 'rules': w('Detection rules', '检测规则'),
+'ai': w('AI assessment', 'AI 评估'), 'notifications': w('Notifications', '通知设置'),
+'advanced': w('Advanced settings', '高级设置'), 'review': w('Test and apply', '测试并应用')} %}
+<div class="page-heading"><div><p class="eyebrow">{{ w('MONITORING SETTINGS', '监控设置') }}</p>
+<h2>{{ titles[section] }}</h2></div>
+{% if section == 'accounts' %}<a class="button" href="#add-mailbox">+ {{ w('Add mailbox', '添加邮箱') }}</a>{% endif %}</div>
+{% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+{% if is_draft %}<div class="draft-bar" role="status"><div><strong>{{ w('Unapplied changes', '有尚未应用的更改') }}</strong>
+<small>{{ w('Continue editing, then test and apply this draft.', '可继续编辑其他页面，完成后统一测试并应用。') }}</small></div>
+<a class="button" href="/configuration/review?draft={{ selected_revision }}">{{ w('Test and apply', '测试并应用') }}</a></div>{% endif %}
+{% if not selected_revision and section != 'accounts' %}
+<div class="card empty"><h3>{{ w('Connect your first mailbox', '先添加第一个邮箱') }}</h3>
+<p>{{ w('Then configure rules, AI and notifications.', '随后即可配置检测规则、AI 和通知。') }}</p>
+<a class="button" href="/accounts">{{ w('Add mailbox', '添加邮箱') }}</a></div>
+{% else %}{% include section ~ '.settings.html' %}{% endif %}
+{% endblock %}

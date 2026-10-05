@@ -31,7 +31,7 @@ docker compose logs --tail 20 mailsentry
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and use the one-time setup path
 printed in the logs. Create the administrator, then either confirm the redacted
-legacy import or complete the common-settings form. An enabled mailbox must pass
+legacy import or add a mailbox on the Mailboxes page. An enabled mailbox must pass
 its read-only connection test and 24-hour no-notification preview before activation.
 
 For a headless installation, edit `config.yaml` and `.env` and use the existing
@@ -71,6 +71,25 @@ configuration directory become the source of truth. Each immutable revision keep
 non-secret YAML separate from a restricted secret file. Empty secret fields retain
 the current value; replacement and removal are explicit. Exports contain only
 non-secret settings and “must be provided” markers.
+
+Use the dedicated Mailboxes, Detection rules, AI assessment, Notifications, and
+Test and apply pages. Add multiple Gmail or custom TLS IMAP accounts before initial
+activation. Each mailbox can be edited, disabled, or removed without deleting source
+mail or assessment history. Use a new alias when changing the address, host, or
+folder of an account that already has a scan cursor.
+
+Rules accept one keyword, attachment extension, or sender per line. Sender lists
+accept exact addresses and `@domains`: priority senders receive 100 points and
+immediate notification, overriding silent senders, which are recorded only.
+Keywords match subjects only and add 35 points once. Try saved rules with the
+local score calculator. The AI page exposes Base URL, model ID, API key and timeout;
+notifications accept Discord webhook or Apprise URLs and digest scheduling.
+
+Navigation retains the selected draft and its secrets. Saving does not change
+active monitoring. Finish editing, then test mailbox connections, new-account
+previews, and enabled integrations before applying. Each save creates a new draft
+with fresh test requirements. Advanced YAML remains available separately; ordinary
+setup needs neither YAML editing nor manual secret-variable names.
 
 For an end-to-end personal Gmail and Discord webhook walkthrough, follow the
 [Gmail and Discord setup guide](docs/setup-gmail-discord.md).

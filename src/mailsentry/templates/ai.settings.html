@@ -1,0 +1,20 @@
+{% set c = config.classification.cloud %}
+<p class="page-description">{{ w('Optional assessment for ambiguous messages only. Provider failures fall back to local rules.',
+'可选功能：仅对规则判定为模糊的邮件进行二次评估，供应商失败时使用本地规则结果。') }}</p>
+<form class="card" method="post" action="/settings/ai">{{ state() }}
+<h3>{{ w('Responses-compatible provider', 'Responses 兼容模型供应商') }}</h3>
+<label class="field">{{ t.cloud_assessment }}<select name="enabled">
+<option value="false" {% if values.get('enabled', 'true' if c.enabled else 'false') == 'false' %}selected{% endif %}>{{ t.disabled }}</option>
+<option value="true" {% if values.get('enabled', 'true' if c.enabled else 'false') == 'true' %}selected{% endif %}>{{ t.enabled }}</option></select></label>
+<div class="form-grid">
+<label class="field">Base URL<input type="url" name="base_url" list="provider-endpoints" value="{{ values.get('base_url', c.base_url) }}" required>
+<datalist id="provider-endpoints"><option value="https://api.openai.com/v1">OpenAI</option><option value="https://api.deepseek.com">DeepSeek</option></datalist>
+<small>{{ w('Select a suggestion or enter a custom HTTPS endpoint.', '选择预设建议，或填写自定义 HTTPS 端点。') }}</small></label>
+{{ input('model', w('Model ID', '模型名称'), c.model, help=w('Exact model ID from your provider.', '供应商提供的完整模型 ID。')) }}
+{{ input('secret', 'API Key', type='password', help=t.empty_keeps_current) }}
+{{ input('timeout_seconds', w('Timeout (seconds)', '超时（秒）'), c.timeout_seconds, 'number', true) }}
+</div><p class="muted">{{ w('The provider must support Responses API and structured JSON output.', '供应商须支持 Responses API 和结构化 JSON 输出。') }}</p>
+<label class="check"><input type="checkbox" name="remove_secret" value="yes">{{ w('Remove stored API key', '移除已保存的 API Key') }}</label>
+<div class="notice">{{ w('Cloud requests contain sender, subject, attachment metadata and up to 4,000 cleaned body characters. This also applies to mailbox preview. Bodies and attachment contents are not stored.',
+'云端请求包含发件人、主题、附件元数据及最多 4,000 个清洗后的正文字符；邮箱预览也遵循此规则。不会存储正文或附件内容。') }}</div>
+{{ save() }}</form>

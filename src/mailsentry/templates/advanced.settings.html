@@ -1,0 +1,6 @@
+<p class="page-description">{{ w('Complete non-secret YAML. Use the dedicated forms for mailbox passwords and API keys.',
+'完整的非秘密 YAML 配置。邮箱密码和 API Key 请使用各自页面的凭据输入框。') }}</p>
+<form class="card" method="post" action="/settings/advanced">{{ state() }}
+<label class="field">YAML<textarea name="config_text" spellcheck="false">{{ values.get('config_text', config_text) }}</textarea></label>
+{{ save() }}</form>
+{% if active_revision %}<a class="button secondary" href="/configuration/export">{{ t.export_redacted }}</a>{% endif %}

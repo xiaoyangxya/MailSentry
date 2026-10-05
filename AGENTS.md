@@ -36,6 +36,9 @@ Before planning or implementing project work:
   Web and CLI callers.
 - `src/mailsentry/auth.py`, `src/mailsentry/web.py`: single-Owner authentication,
   sessions, CSRF/TOTP, and the bilingual FastAPI/Jinja/HTMX control panel.
+- `src/mailsentry/settings_ui.py`, `src/mailsentry/templates/`: mailbox, rule,
+  AI, notification, and test/apply views. Saves inherit the selected draft's
+  settings and secrets; conflicts are checked before saving or activating.
 - `src/mailsentry/soak.py`: deterministic offline multi-account soak simulation,
   fault injection, evidence metrics, and release-gate reconciliation.
 - `src/mailsentry/cli.py`: headless operations plus the default `serve` control
